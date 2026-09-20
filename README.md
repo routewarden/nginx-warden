@@ -8,12 +8,14 @@
   <a href="https://github.com/routewarden/nginx-warden/actions/workflows/ci.yml"><img src="https://github.com/routewarden/nginx-warden/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
   <a href="https://routewarden.github.io/docs/"><img src="https://img.shields.io/badge/Docs-Wiki-6366f1.svg" alt="Documentation Site" /></a>
+  <a href="https://routewarden.github.io/docs/tools/pattern-checker?format=nginx"><img src="https://img.shields.io/badge/Playground-Live%20Simulation-0ea5e9.svg" alt="Interactive Playground" /></a>
 </p>
 
 ---
 
-- **Live Playground**: [Try RouteWarden in your browser](https://routewarden.github.io/docs/?playground=open)
-- **Documentation & Guides**: [https://routewarden.github.io/docs/](https://routewarden.github.io/docs/)
+- **Live Playground**: [Try RouteWarden in your browser (NGINX Lua Mode)](https://routewarden.github.io/docs/tools/pattern-checker?format=nginx)
+- **Documentation & Guides**: [https://routewarden.github.io/docs/nginx/](https://routewarden.github.io/docs/nginx/)
+- **Configuration Reference**: [NGINX & OpenResty Reference](https://routewarden.github.io/docs/nginx/configuration)
 - **Example Configurations**: [`examples/`](examples/)
 - **Live Multi-Port Testing Suite**: [`samples/`](samples/)
 
@@ -147,6 +149,32 @@ http {
 | `check_query` | `boolean` | `false` | When true, inspects raw and decoded query string values. |
 | `security_log` | `boolean` | `false` | Emits structured JSON events compatible with CrowdSec parsers. |
 | `response` | `table` | `{ mode = "json", status_code = 403 }` | Response customization table. |
+
+---
+
+## CLI & Config Generation
+
+You can use the official [`rwarden`](https://routewarden.github.io/cli/) CLI tool to test path rules offline, validate configurations, and automatically generate NGINX / OpenResty Lua configuration tables directly from a unified `routewarden.json` schema:
+
+```bash
+# Install RouteWarden CLI
+curl -fsSL https://routewarden.github.io/cli/install.sh | bash
+
+# Or run via Docker
+docker run --rm ghcr.io/routewarden/cli:latest version
+```
+
+### Generating NGINX / OpenResty Lua Tables:
+
+```bash
+# Generate OpenResty Lua table for init_by_lua_block in nginx.conf
+rwarden generate --target nginx --config routewarden.json
+
+# Test a suspicious probe path against rules offline
+rwarden test --path "/.env"
+```
+
+For complete documentation on the CLI, installation methods, and options, visit the **[RouteWarden CLI Documentation](https://routewarden.github.io/cli/)**.
 
 ---
 

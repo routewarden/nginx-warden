@@ -191,4 +191,48 @@ do
     print("  ✓ Disabled module passes requests untouched")
 end
 
+-- 14. Expanded default block patterns (keys, container, ds_store, wp-config)
+do
+    local rw = routewarden.new()
+    local sensitive_paths = {
+        "/server.key",
+        "/cert.pem",
+        "/Dockerfile",
+        "/docker-compose.yml",
+        "/.DS_Store",
+        "/wp-config.php"
+    }
+    for _, p in ipairs(sensitive_paths) do
+        local passed = simulate_request(rw, "GET", p)
+        assert(passed == false, "Expected " .. p .. " to be blocked by expanded default patterns")
+    end
+    print("  ✓ Expanded default patterns (keys, containers, wp-config, ds_store) verified")
+end
+
+-- 15. Header inspection (check_headers)
+do
+    local rw = routewarden.new({
+        check_headers = { "X-Forwarded-Uri", "X-Rewrite-URL" }
+    })
+    -- Clean request with safe header
+    local passed_clean = simulate_request(rw, "GET", "/app", "/app", { ["x-forwarded-uri"] = "/app" })
+    assert(passed_clean == true, "Clean header should pass")
+
+    -- Smuggled .env in header
+    local passed_smuggled, cap, info = simulate_request(rw, "GET", "/app", "/app", { ["x-forwarded-uri"] = "/.env" })
+    assert(passed_smuggled == false, "Smuggled .env in header should be blocked")
+    assert(info.reason == "header_blocked")
+    print("  ✓ Header injection inspection (check_headers) verified")
+end
+
+-- 16. Regex caching across multiple new() instances
+do
+    local rw1 = routewarden.new()
+    local rw2 = routewarden.new()
+    assert(#rw1.compiled_block == #rw2.compiled_block)
+    assert(rw1.compiled_block[1] == rw2.compiled_block[1], "Compiled regex should be reused from cache")
+    print("  ✓ Regex compilation caching verified")
+end
+
 print("All routewarden integration tests passed successfully!")
+

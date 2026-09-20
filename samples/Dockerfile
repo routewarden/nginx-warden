@@ -9,6 +9,6 @@ COPY samples/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY samples/nginx.conf /etc/nginx/nginx.conf
 COPY samples/nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093
+EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094
 
 CMD ["/usr/local/openresty/bin/openresty", "-c", "/usr/local/openresty/nginx/conf/nginx.conf", "-g", "daemon off;"]

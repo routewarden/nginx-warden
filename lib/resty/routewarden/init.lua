@@ -8,16 +8,23 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.0.0"
+    _VERSION = "1.1.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
 local has_ngx_re = (ngx and ngx.re and type(ngx.re.find) == "function")
 
--- Compile regex or create matcher function
+-- Global / module-level regex cache to reuse compiled matchers across instances & requests
+local regex_cache = {}
+
+-- Compile regex or create matcher function (cached)
 local function compile_regex(pattern)
     if not pattern or pattern == "" then
         return nil
+    end
+
+    if regex_cache[pattern] then
+        return regex_cache[pattern]
     end
 
     -- Clean Go (?i) flag prefix if present, and track case-insensitivity
@@ -30,7 +37,7 @@ local function compile_regex(pattern)
     end
 
     if has_ngx_re then
-        return {
+        compiled = {
             pattern = pattern,
             raw_regex = pcre_pattern,
             flags = pcre_flags,
@@ -41,7 +48,7 @@ local function compile_regex(pattern)
         }
     else
         -- Pure Lua fallback matcher for standalone testing without OpenResty
-        return {
+        compiled = {
             pattern = pattern,
             raw_regex = pcre_pattern,
             flags = pcre_flags,
@@ -123,7 +130,39 @@ local function compile_regex(pattern)
                     end
                 end
 
-                -- 6. Default allow patterns
+                -- 6. TLS keys, certificates, keystores
+                if string.find(pat, "pem|key|crt", 1, true) then
+                    local key_exts = { "pem", "key", "crt", "pfx", "p12", "jks", "kdb" }
+                    for _, ke in ipairs(key_exts) do
+                        if string.find(lower_target, "%." .. ke .. "$") or string.find(lower_target, "%." .. ke .. "[%?#]") then
+                            return true
+                        end
+                    end
+                end
+
+                -- 7. Container manifests
+                if string.find(pat, "dockerfile", 1, true) then
+                    if string.find(lower_target, "dockerfile") or string.find(lower_target, "docker%-compose") then
+                        return true
+                    end
+                end
+
+                -- 8. macOS metadata
+                if string.find(pat, "ds_store", 1, true) then
+                    if string.find(lower_target, "%.ds_store") then
+                        return true
+                    end
+                end
+
+                -- 9. CMS & framework configs
+                if string.find(pat, "wp%-config", 1) or string.find(pat, "wp-config", 1, true) then
+                    if string.find(lower_target, "wp%-config%.php") or string.find(lower_target, "configuration%.php") or
+                       string.find(lower_target, "settings%.py") then
+                        return true
+                    end
+                end
+
+                -- 10. Default allow patterns
                 if string.find(pat, "robots%.txt", 1) and (lower_target == "/robots.txt" or lower_target == "robots.txt") then
                     return true
                 end
@@ -144,6 +183,11 @@ local function compile_regex(pattern)
             end
         }
     end
+
+    if compiled then
+        regex_cache[pattern] = compiled
+    end
+    return compiled
 end
 
 -- Constructor for RouteWarden instance
@@ -162,6 +206,7 @@ function _M.new(opts)
         if opts.custom_response_text ~= nil then cfg.custom_response_text = opts.custom_response_text end
 
         if opts.methods then cfg.methods = opts.methods end
+        if opts.check_headers then cfg.check_headers = opts.check_headers end
         if opts.path_patterns then cfg.path_patterns = opts.path_patterns end
         if opts.block_patterns then cfg.block_patterns = opts.block_patterns end
         if opts.allow_patterns then cfg.allow_patterns = opts.allow_patterns end
@@ -374,6 +419,29 @@ function _M:inspect(req_ctx)
         end
     end
 
+    -- Optional Header Inspection
+    if not is_blocked and self.config.check_headers and #self.config.check_headers > 0 then
+        for _, hdr_name in ipairs(self.config.check_headers) do
+            local hdr_val = headers[string.lower(hdr_name)] or headers[hdr_name]
+            if hdr_val and hdr_val ~= "" then
+                local header_candidates = normalizer.extract_candidate_paths(hdr_val, hdr_val, hdr_val)
+                for _, hc in ipairs(header_candidates) do
+                    for _, block_re in ipairs(self.compiled_block) do
+                        if block_re:match(hc) then
+                            is_blocked = true
+                            blocked_pattern = block_re.pattern
+                            blocked_target = hdr_val
+                            blocked_reason = "header_blocked"
+                            break
+                        end
+                    end
+                    if is_blocked then break end
+                end
+            end
+            if is_blocked then break end
+        end
+    end
+
     if is_blocked then
         local block_info = {
             client_ip = client_ip,
@@ -398,8 +466,27 @@ end
 
 -- Top-level check function called from access_by_lua_block
 function _M:check(req_ctx)
-    -- If no req_ctx passed, use NGINX request context automatically
+    -- If no req_ctx passed, build clean NGINX request context automatically
     local ctx = req_ctx or {}
+    if not ctx.query_string and ngx and ngx.var then
+        ctx.query_string = ngx.var.query_string or ""
+    end
+    if not ctx.raw_uri and ngx and ngx.var then
+        ctx.raw_uri = ngx.var.request_uri or ""
+    end
+    if not ctx.uri and ngx and ngx.var then
+        ctx.uri = ngx.var.uri or "/"
+    end
+    if not ctx.method and ngx and ngx.req and ngx.req.get_method then
+        ctx.method = ngx.req.get_method()
+    end
+    if not ctx.headers and ngx and ngx.req and ngx.req.get_headers then
+        ctx.headers = ngx.req.get_headers()
+    end
+    if not ctx.remote_addr and ngx and ngx.var then
+        ctx.remote_addr = ngx.var.remote_addr or ""
+    end
+
     local passed, block_info = self:inspect(ctx)
     if not passed then
         return self.response_handler:serve(ctx)
