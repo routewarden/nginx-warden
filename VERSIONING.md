@@ -10,7 +10,7 @@ The canonical version of RouteWarden for NGINX is stored in [`version.json`](ver
 
 ```json
 {
-  "version": "v0.1.0"
+  "version": "v1.0.0"
 }
 ```
 
@@ -25,8 +25,8 @@ RouteWarden follows standard [Semantic Versioning (SemVer 2.0.0)](https://semver
 $$\text{v}\mathbf{MAJOR}.\mathbf{MINOR}.\mathbf{PATCH}$$
 
 - **MAJOR** (`v1.0.0`): Breaking architectural changes or modified public API.
-- **MINOR** (`v0.2.0`): Backwards-compatible features (e.g., new response modes, anti-evasion rules).
-- **PATCH** (`v0.1.1`): Backwards-compatible bug fixes or performance optimizations.
+- **MINOR** (`v1.1.0`): Backwards-compatible features (e.g., new response modes, anti-evasion rules).
+- **PATCH** (`v1.0.1`): Backwards-compatible bug fixes or performance optimizations.
 
 ---
 
@@ -35,7 +35,7 @@ $$\text{v}\mathbf{MAJOR}.\mathbf{MINOR}.\mathbf{PATCH}$$
 To synchronize versions across `version.json`, `README.md`, and Lua source files:
 
 ```bash
-./scripts/update-version.sh v0.1.1
+./scripts/update-version.sh v1.0.0
 ```
 
 ---
@@ -49,14 +49,14 @@ To synchronize versions across `version.json`, `README.md`, and Lua source files
 
 ### Step 2: Update Version Strings
 ```bash
-./scripts/update-version.sh v0.1.1
+./scripts/update-version.sh v1.0.0
 ```
 
 ### Step 3: Review Diff & Commit
 ```bash
 git diff
 git add -u
-git commit -m "chore: release v0.1.1"
+git commit -m "chore: release v1.0.0"
 ```
 
 ### Step 4: Tag & Push
