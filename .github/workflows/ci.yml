@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-lua:
+    name: Lua Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Lua
+        uses: hishamhm/gh-actions-lua@master
+        with:
+          luaVersion: "5.1"
+
+      - name: Run Test Suite
+        run: |
+          chmod +x t/run_tests.sh
+          ./t/run_tests.sh
+
+  ci-success:
+    name: CI Status Check
+    needs: [test-lua]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish CI Results Summary
+        run: |
+          echo "## 🛡️ RouteWarden NGINX (Lua) CI Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Lua Test Suite** | ✅ Passed | Ran standalone normalizer, ip_filter, config, response, and integration tests |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Ready for merge! All checks passed.**" >> $GITHUB_STEP_SUMMARY

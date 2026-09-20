@@ -1,0 +1,10 @@
+# .gitignore for nginx-warden
+*.log
+*.tar.gz
+*.rock
+.DS_Store
+.luarocks/
+t/servroot/
+logs/
+coverage/
+luacov.*
