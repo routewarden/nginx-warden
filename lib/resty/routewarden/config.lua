@@ -18,7 +18,15 @@ _M.default_block_patterns = {
     -- Common sensitive admin & debug endpoints
     [[(?i)(^|/)(phpinfo\.php|info\.php|server-status|server-info|actuator(/.*)?|metrics|heapdump|trace|env)$]],
     -- Package manager files & lockfiles
-    [[(?i)(^|/)(composer\.(json|lock)|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Pipfile|Pipfile\.lock|requirements\.txt)$]]
+    [[(?i)(^|/)(composer\.(json|lock)|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Pipfile|Pipfile\.lock|requirements\.txt)$]],
+    -- TLS & cryptographic private keys, certificates, keystores
+    [[(?i).*\.(pem|key|crt|pfx|p12|jks|kdb)$]],
+    -- Container & orchestration manifests and configs
+    [[(?i)(^|/)(dockerfile.*|docker-compose.*\.ya?ml)$]],
+    -- System & macOS metadata files
+    [[(?i)(^|/)\.ds_store$]],
+    -- Web framework and CMS sensitive configuration files
+    [[(?i)(^|/)(wp-config\.php.*|configuration\.php.*|settings\.py|local_settings\.py)$]]
 }
 
 -- Default allow patterns that exempt legitimate endpoints matching broad rules
@@ -66,6 +74,7 @@ function _M.default_config()
         allowed_ips = {},
         methods = { "GET" },
         check_query = false,
+        check_headers = {},
         status_code = nil,
         custom_response_text = nil,
         silent_drop = false,
