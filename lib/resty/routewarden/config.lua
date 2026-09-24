@@ -78,7 +78,7 @@ function _M.default_config()
         status_code = nil,
         custom_response_text = nil,
         debug = false,
-        security_log = false,
+        security_log = true,
         response = _M.default_response_config()
     }
 end

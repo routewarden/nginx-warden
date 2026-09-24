@@ -36,6 +36,7 @@ local function compile_regex(pattern)
         pcre_flags = "ijo"
     end
 
+    local compiled
     if has_ngx_re then
         compiled = {
             pattern = pattern,
