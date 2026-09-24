@@ -56,5 +56,17 @@ assert(ip_filter.extract_client_ip(h2, "127.0.0.1") == "198.51.100.1")
 
 local h3 = {}
 assert(ip_filter.extract_client_ip(h3, "192.0.2.1:54321") == "192.0.2.1")
+assert(ip_filter.extract_client_ip(h3, "[2001:db8::1]:12345") == "2001:db8::1")
+assert(ip_filter.extract_client_ip(h3, "[::1]:8080") == "::1")
+
+local h4 = { ["x-forwarded-for"] = "192.168.1.50:49200, 10.0.0.1" }
+assert(ip_filter.extract_client_ip(h4, "127.0.0.1") == "192.168.1.50")
+
+local h5 = { ["x-forwarded-for"] = "[2001:db8::99]:55432" }
+assert(ip_filter.extract_client_ip(h5, "127.0.0.1") == "2001:db8::99")
+
+local h6 = { ["x-real-ip"] = "[2001:db8::99]" }
+assert(ip_filter.extract_client_ip(h6, "127.0.0.1") == "2001:db8::99")
 
 print("All ip_filter tests passed successfully!")
+

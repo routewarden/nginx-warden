@@ -3,7 +3,7 @@
 -- matrix parameters (;), backslash separators (\), null bytes, and dot traversals.
 
 local _M = {
-    _VERSION = "1.2.0"
+    _VERSION = "1.2.1"
 }
 
 -- Strip query string from a raw URI if present
@@ -105,14 +105,20 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     end
 
     -- 3. Perform iterative unescaping (up to 3 times) to prevent multi-layer URL encoding evasion (%252e%252e)
-    local cur_path = base_path
-    for _ = 1, 3 do
-        local unescaped = unescape_percent(cur_path)
-        if not unescaped or unescaped == cur_path then
-            break
+    local to_unescape = { base_path }
+    if raw_uri_path and raw_uri_path ~= "" and raw_uri_path ~= base_path then
+        table.insert(to_unescape, raw_uri_path)
+    end
+    for _, initial in ipairs(to_unescape) do
+        local cur_path = initial
+        for _ = 1, 3 do
+            local unescaped = unescape_percent(cur_path)
+            if not unescaped or unescaped == cur_path then
+                break
+            end
+            table.insert(paths_to_check, _M.clean_path(unescaped))
+            cur_path = unescaped
         end
-        table.insert(paths_to_check, _M.clean_path(unescaped))
-        cur_path = unescaped
     end
 
     -- 4. Check backslash-converted paths (Windows / IIS style path traversal / separator evasion)
@@ -201,24 +207,37 @@ function _M.extract_query_candidates(raw_query)
         table.insert(candidates, unescaped)
     end
 
-    -- Parse query params
+    -- Parse query params (extracting both keys and values)
     for pair in string.gmatch(raw_query, "[^&;]+") do
         local eq_idx = string.find(pair, "=", 1, true)
-        local val = pair
+        local key = pair
+        local val = ""
         if eq_idx then
+            key = string.sub(pair, 1, eq_idx - 1)
             val = string.sub(pair, eq_idx + 1)
         end
+
+        if key ~= "" then
+            table.insert(candidates, key)
+            local unescaped_key = unescape_percent(key)
+            if unescaped_key ~= key then
+                table.insert(candidates, unescaped_key)
+            end
+            local key_cands = _M.extract_candidate_paths(key, key, key)
+            for _, kc in ipairs(key_cands) do
+                table.insert(candidates, kc)
+            end
+        end
+
         if val ~= "" then
             table.insert(candidates, val)
             local unescaped_val = unescape_percent(val)
             if unescaped_val ~= val then
                 table.insert(candidates, unescaped_val)
             end
-
-            -- Also test candidate paths for the parameter value
-            local path_cands = _M.extract_candidate_paths(val, val, val)
-            for _, pc in ipairs(path_cands) do
-                table.insert(candidates, pc)
+            local val_cands = _M.extract_candidate_paths(val, val, val)
+            for _, vc in ipairs(val_cands) do
+                table.insert(candidates, vc)
             end
         end
     end

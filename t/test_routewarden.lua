@@ -234,5 +234,48 @@ do
     print("  ✓ Regex compilation caching verified")
 end
 
+-- 17. Query parameter key blocking and traversal
+do
+    local rw = routewarden.new({ check_query = true })
+    local passed_key = simulate_request(rw, "GET", "/search?foo=bar&.env=1", "/search", {}, "foo=bar&.env=1")
+    assert(passed_key == false, "Query key .env should be blocked")
+
+    local passed_traversal = simulate_request(rw, "GET", "/search?file=/images/../.env", "/search", {}, "file=/images/../.env")
+    assert(passed_traversal == false, "Query traversal value /images/../.env should be blocked")
+    print("  ✓ Query key and traversal inspection verified")
+end
+
+-- 18. Singular directive configuration support (path_pattern, block_pattern, allow_pattern, allowed_ip)
+do
+    local rw = routewarden.new({
+        path_pattern = "(?i)^/singular-path$",
+        block_pattern = "(?i)^/singular-block$",
+        allow_pattern = "(?i)^/singular-allow$",
+        allowed_ip = "192.168.1.99"
+    })
+    assert(simulate_request(rw, "GET", "/singular-path") == false, "path_pattern should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-block") == false, "block_pattern should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-allow") == true, "allow_pattern should pass")
+    assert(simulate_request(rw, "GET", "/singular-path", "/singular-path", {}, "", "192.168.1.99") == true, "allowed_ip should bypass")
+    print("  ✓ Singular directive configuration support verified")
+end
+
+-- 19. Action reporting for silent_drop
+do
+    local rw = routewarden.new({
+        response = { mode = "silent_drop" },
+        security_log = true
+    })
+    local logged_payload = nil
+    rw:set_log_sink(function(json_str, payload)
+        logged_payload = payload
+    end)
+    local passed = simulate_request(rw, "GET", "/.env")
+    assert(passed == false)
+    assert(logged_payload.action == "silentDrop", "expected action to be silentDrop, got: " .. tostring(logged_payload.action))
+    print("  ✓ Action reported as silentDrop for mode silent_drop")
+end
+
 print("All routewarden integration tests passed successfully!")
+
 

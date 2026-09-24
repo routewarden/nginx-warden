@@ -2,7 +2,7 @@
 -- IPv4/IPv6 address parsing and CIDR subnet evaluation for client IP whitelisting
 
 local _M = {
-    _VERSION = "1.2.0"
+    _VERSION = "1.2.1"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number
@@ -199,27 +199,40 @@ function _M.new(allowed_ips_config)
     return setmetatable(self, { __index = _M })
 end
 
+local function clean_ip(raw)
+    if not raw or raw == "" then return "" end
+    local ip = string.match(raw, "^%s*(.-)%s*$")
+    if string.sub(ip, 1, 1) == "[" then
+        -- [::1]:8080 or [::1]
+        local bracket_end = string.find(ip, "]", 2, true)
+        if bracket_end then
+            ip = string.sub(ip, 2, bracket_end - 1)
+        else
+            ip = string.gsub(ip, "[%[%]]", "")
+        end
+    elseif string.find(ip, "%.") then
+        -- IPv4 with port (e.g. 192.168.1.1:8080)
+        local colon = string.find(ip, ":", 1, true)
+        if colon then
+            ip = string.sub(ip, 1, colon - 1)
+        end
+    elseif string.find(ip, ":", 1, true) and not string.find(ip, "::", 1, true) then
+        -- check if last segment after colon is port on non-bracketed IPv4 or host
+        local colon = string.find(ip, ":", 1, true)
+        if colon and not string.find(string.sub(ip, colon + 1), ":", 1, true) then
+            ip = string.sub(ip, 1, colon - 1)
+        end
+    end
+    return string.gsub(ip, "[%[%]]", "")
+end
+
 -- Is an IP allowed?
 function _M:is_allowed(client_ip_str)
     if not client_ip_str or client_ip_str == "" then
         return false
     end
 
-    -- Clean IP: strip port if host:port (e.g. 192.168.1.1:54321)
-    local ip = client_ip_str
-    if string.sub(ip, 1, 1) == "[" then
-        -- [::1]:8080
-        local bracket_end = string.find(ip, "]", 2, true)
-        if bracket_end then
-            ip = string.sub(ip, 2, bracket_end - 1)
-        end
-    elseif string.find(ip, "%.") then
-        -- IPv4 with port
-        local colon = string.find(ip, ":", 1, true)
-        if colon then
-            ip = string.sub(ip, 1, colon - 1)
-        end
-    end
+    local ip = clean_ip(client_ip_str)
 
     if string.find(ip, ":", 1, true) then
         -- IPv6 evaluation
@@ -265,28 +278,24 @@ function _M.extract_client_ip(headers, remote_addr)
         if xff and xff ~= "" then
             local first_ip = string.match(xff, "^([^,]+)")
             if first_ip then
-                local trimmed = string.match(first_ip, "^%s*(.-)%s*$")
-                if trimmed ~= "" then
-                    return trimmed
+                local cleaned = clean_ip(first_ip)
+                if cleaned ~= "" then
+                    return cleaned
                 end
             end
         end
 
         local xrip = headers["x-real-ip"] or headers["X-Real-IP"]
         if xrip and xrip ~= "" then
-            local trimmed = string.match(xrip, "^%s*(.-)%s*$")
-            if trimmed ~= "" then
-                return trimmed
+            local cleaned = clean_ip(xrip)
+            if cleaned ~= "" then
+                return cleaned
             end
         end
     end
 
     if remote_addr then
-        local colon = string.find(remote_addr, ":", 1, true)
-        if colon and not string.find(remote_addr, "::", 1, true) then
-            return string.sub(remote_addr, 1, colon - 1)
-        end
-        return remote_addr
+        return clean_ip(remote_addr)
     end
 
     return ""
