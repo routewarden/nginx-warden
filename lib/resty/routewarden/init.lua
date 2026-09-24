@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.2.0"
+    _VERSION = "1.2.1"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -36,6 +36,7 @@ local function compile_regex(pattern)
         pcre_flags = "ijo"
     end
 
+    local compiled
     if has_ngx_re then
         compiled = {
             pattern = pattern,
@@ -66,11 +67,12 @@ local function compile_regex(pattern)
                     return true
                 end
 
-                -- 2. Clean PCRE groups e.g. (^|/) and retry
+                -- 2. Clean PCRE groups e.g. (^|/) and escape literal hyphens outside character classes
                 local clean_pcre = string.gsub(lua_pat, "%(%^|/%)", "")
                 clean_pcre = string.gsub(clean_pcre, "%(%?i%)", "")
+                local lua_escaped = string.gsub(clean_pcre, "([^%%%[])%-", "%1%%-")
                 ok, res = pcall(function()
-                    return string.find(lower_target, clean_pcre)
+                    return string.find(lower_target, lua_escaped)
                 end)
                 if ok and res ~= nil then
                     return true
@@ -207,9 +209,19 @@ function _M.new(opts)
         if opts.methods then cfg.methods = opts.methods end
         if opts.check_headers then cfg.check_headers = opts.check_headers end
         if opts.path_patterns then cfg.path_patterns = opts.path_patterns end
+        if opts.path_pattern then cfg.path_pattern = opts.path_pattern end
         if opts.block_patterns then cfg.block_patterns = opts.block_patterns end
+        if opts.block_pattern then cfg.block_pattern = opts.block_pattern end
         if opts.allow_patterns then cfg.allow_patterns = opts.allow_patterns end
+        if opts.allow_pattern then cfg.allow_pattern = opts.allow_pattern end
         if opts.allowed_ips then cfg.allowed_ips = opts.allowed_ips end
+        if opts.allowed_ip then cfg.allowed_ip = opts.allowed_ip end
+
+        if opts.mode then
+            cfg.response.mode = string.lower(opts.mode)
+        elseif opts.action then
+            cfg.response.mode = string.lower(opts.action)
+        end
 
         if opts.response then
             local resp_cfg = config.default_response_config()
@@ -245,6 +257,17 @@ function _M.new(opts)
         methods_map["GET"] = true
     end
 
+    local function add_entries(target, entries)
+        if not entries then return end
+        if type(entries) == "string" then
+            table.insert(target, entries)
+        elseif type(entries) == "table" then
+            for _, item in ipairs(entries) do
+                table.insert(target, item)
+            end
+        end
+    end
+
     -- Compile block patterns
     local all_block_patterns = {}
     if cfg.enable_default_patterns then
@@ -252,16 +275,10 @@ function _M.new(opts)
             table.insert(all_block_patterns, p)
         end
     end
-    if cfg.path_patterns then
-        for _, p in ipairs(cfg.path_patterns) do
-            table.insert(all_block_patterns, p)
-        end
-    end
-    if cfg.block_patterns then
-        for _, p in ipairs(cfg.block_patterns) do
-            table.insert(all_block_patterns, p)
-        end
-    end
+    add_entries(all_block_patterns, cfg.path_patterns)
+    add_entries(all_block_patterns, cfg.block_patterns)
+    add_entries(all_block_patterns, cfg.path_pattern)
+    add_entries(all_block_patterns, cfg.block_pattern)
 
     local compiled_block = {}
     for _, p in ipairs(all_block_patterns) do
@@ -281,11 +298,8 @@ function _M.new(opts)
             table.insert(all_allow_patterns, p)
         end
     end
-    if cfg.allow_patterns then
-        for _, p in ipairs(cfg.allow_patterns) do
-            table.insert(all_allow_patterns, p)
-        end
-    end
+    add_entries(all_allow_patterns, cfg.allow_patterns)
+    add_entries(all_allow_patterns, cfg.allow_pattern)
 
     local compiled_allow = {}
     for _, p in ipairs(all_allow_patterns) do
@@ -299,9 +313,13 @@ function _M.new(opts)
     end
 
     -- Initialize IP Filter
+    local all_allowed_ips = {}
+    add_entries(all_allowed_ips, cfg.allowed_ips)
+    add_entries(all_allowed_ips, cfg.allowed_ip)
+
     local ip_matcher, err
-    if cfg.allowed_ips and #cfg.allowed_ips > 0 then
-        ip_matcher, err = ip_filter.new(cfg.allowed_ips)
+    if #all_allowed_ips > 0 then
+        ip_matcher, err = ip_filter.new(all_allowed_ips)
         if not ip_matcher then
             error("routewarden init error: " .. tostring(err))
         end
@@ -325,6 +343,12 @@ end
 
 -- Validate configuration (returns true, or false, err)
 function _M:validate()
+    if self.config.status_code then
+        local code = self.config.status_code
+        if code < 100 or code > 599 then
+            return false, string.format("routewarden: statusCode must be between 100 and 599, got %d", code)
+        end
+    end
     if self.config.response and self.config.response.status_code then
         local code = self.config.response.status_code
         if code < 100 or code > 599 then
@@ -439,13 +463,18 @@ function _M:inspect(req_ctx)
     end
 
     if is_blocked then
+        local action_mode = self.config.response.mode
+        if self.response_handler and self.response_handler.silent_drop then
+            action_mode = "silentDrop"
+        end
+
         local block_info = {
             client_ip = client_ip,
             method = method,
             path = blocked_target,
             request_uri = raw_uri,
             pattern = blocked_pattern,
-            action = self.config.response.mode,
+            action = action_mode,
             reason = blocked_reason,
             user_agent = (headers and (headers["user-agent"] or headers["User-Agent"])) or ""
         }

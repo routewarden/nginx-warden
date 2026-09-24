@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.2.0"
+    _VERSION = "1.2.1"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -151,7 +151,7 @@ function _M.new(response_config)
         silent_drop = cfg.silent_drop or false
     }
 
-    if self.mode == "silentdrop" or self.mode == "drop" then
+    if self.mode == "silentdrop" or self.mode == "silent_drop" or self.mode == "drop" then
         self.silent_drop = true
     end
 
@@ -163,7 +163,7 @@ function _M:serve(req_ctx)
     local mode = self.mode
 
     -- Silent Drop: abruptly terminate connection
-    if self.silent_drop or mode == "silentdrop" or mode == "drop" then
+    if self.silent_drop or mode == "silentdrop" or mode == "silent_drop" or mode == "drop" then
         if req_ctx and req_ctx.on_silent_drop then
             req_ctx.on_silent_drop()
             return
@@ -309,7 +309,7 @@ function _M:serve(req_ctx)
         return
 
     elseif mode == "fakesuccess" or mode == "decoy" then
-        local req_path = string.lower(req_ctx and req_ctx.uri or (ngx and ngx.var and ngx.var.uri) or "")
+        local req_path = string.lower((req_ctx and (req_ctx.uri or req_ctx.path) or (ngx and ngx.var and ngx.var.uri) or "") .. " " .. (req_ctx and req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""))
         local ct = "text/plain; charset=utf-8"
         local body = self.body
 

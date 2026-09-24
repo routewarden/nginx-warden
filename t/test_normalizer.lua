@@ -110,6 +110,12 @@ print("Testing normalizer: extract_query_candidates...")
 local query_cands = normalizer.extract_query_candidates("file=%2eenv&tag=test")
 assert_contains(query_cands, "file=%2eenv&tag=test", "Raw query")
 assert_contains(query_cands, ".env", "Param candidate path unescaped")
+
+local query_key_cands = normalizer.extract_query_candidates("foo=bar&.env=1&file=/images/../.env")
+assert_contains(query_key_cands, ".env", "Query key .env extracted")
+assert_contains(query_key_cands, "/.env", "Query traversal value /images/../.env normalized to /.env")
+
 print("  ✓ extract_query_candidates passed")
 
 print("All normalizer tests passed successfully!")
+

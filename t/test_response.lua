@@ -112,6 +112,12 @@ do
     local ctx, captured = create_mock_ctx()
     h:serve(ctx)
     assert(captured.silent_dropped == true)
+
+    local h2 = response.new({ mode = "silent_drop" })
+    local ctx2, captured2 = create_mock_ctx()
+    h2:serve(ctx2)
+    assert(captured2.silent_dropped == true)
+
     print("  ✓ mode silentDrop passed")
 end
 
