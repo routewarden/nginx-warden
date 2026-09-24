@@ -60,6 +60,12 @@ if [ -f "${ROOT_DIR}/README.md" ]; then
   echo "  ✓ Synchronized README.md"
 fi
 
+# Update VERSIONING.md code snippets if present
+if [ -f "${ROOT_DIR}/VERSIONING.md" ]; then
+  sed -i '' -E "s|(\"version\"[[:space:]]*:[[:space:]]*\")v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\")|\1${TARGET_VERSION}\3|g" "${ROOT_DIR}/VERSIONING.md"
+  echo "  ✓ Synchronized VERSIONING.md"
+fi
+
 # Update Lua _VERSION strings
 for f in "${ROOT_DIR}/lib/resty/routewarden"/*.lua; do
   if [ -f "$f" ]; then
