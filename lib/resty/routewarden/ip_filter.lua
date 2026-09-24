@@ -2,7 +2,7 @@
 -- IPv4/IPv6 address parsing and CIDR subnet evaluation for client IP whitelisting
 
 local _M = {
-    _VERSION = "1.1.0"
+    _VERSION = "1.2.0"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number

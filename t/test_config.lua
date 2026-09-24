@@ -25,9 +25,8 @@ local rw_custom = routewarden.new({
     enabled = true,
     methods = { "GET", "POST", "PUT" },
     check_query = true,
-    silent_drop = true,
     response = {
-        mode = "rateLimitChallenge",
+        mode = "silentDrop",
         retry_after_seconds = 600,
         status_code = 429
     }
@@ -37,8 +36,7 @@ assert(rw_custom.methods["POST"] == true)
 assert(rw_custom.methods["PUT"] == true)
 assert(rw_custom.methods["DELETE"] == nil)
 assert(rw_custom.config.check_query == true)
-assert(rw_custom.config.response.mode == "ratelimitchallenge")
-assert(rw_custom.config.response.silent_drop == true)
+assert(rw_custom.config.response.mode == "silentdrop")
 assert(rw_custom.config.response.retry_after_seconds == 600)
 
 -- Status code validation

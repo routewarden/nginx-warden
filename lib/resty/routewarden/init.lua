@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.1.0"
+    _VERSION = "1.2.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -199,7 +199,6 @@ function _M.new(opts)
         if opts.enable_default_patterns ~= nil then cfg.enable_default_patterns = opts.enable_default_patterns end
         if opts.enable_default_allow_patterns ~= nil then cfg.enable_default_allow_patterns = opts.enable_default_allow_patterns end
         if opts.check_query ~= nil then cfg.check_query = opts.check_query end
-        if opts.silent_drop ~= nil then cfg.silent_drop = opts.silent_drop end
         if opts.debug ~= nil then cfg.debug = opts.debug end
         if opts.security_log ~= nil then cfg.security_log = opts.security_log end
         if opts.status_code ~= nil then cfg.status_code = opts.status_code end
@@ -224,15 +223,12 @@ function _M.new(opts)
         end
     end
 
-    -- Harmonize status_code and silent_drop with response config
+    -- Harmonize status_code and custom_response_text with response config
     if cfg.status_code then
         cfg.response.status_code = cfg.status_code
     end
     if cfg.custom_response_text and (not cfg.response.body or cfg.response.body == "") then
         cfg.response.body = cfg.custom_response_text
-    end
-    if cfg.silent_drop then
-        cfg.response.silent_drop = true
     end
 
     -- Process methods filter
