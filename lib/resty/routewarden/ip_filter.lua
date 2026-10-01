@@ -1,8 +1,9 @@
 -- lib/resty/routewarden/ip_filter.lua
 -- IPv4/IPv6 address parsing and CIDR subnet evaluation for client IP whitelisting
+-- and trusted proxy validation.
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number
@@ -126,20 +127,36 @@ local function ipv6_match_cidr(ip_bytes, net_bytes, mask_bits)
     return true
 end
 
--- Constructor for IPFilter
-function _M.new(allowed_ips_config)
-    local self = {
-        ipv4_exact = {},
-        ipv4_nets = {},
-        ipv6_exact = {},
-        ipv6_nets = {}
-    }
+local function clean_ip(raw)
+    if not raw or raw == "" then return "" end
+    local ip = string.match(raw, "^%s*(.-)%s*$")
+    if string.sub(ip, 1, 1) == "[" then
+        local bracket_end = string.find(ip, "]", 2, true)
+        if bracket_end then
+            ip = string.sub(ip, 2, bracket_end - 1)
+        else
+            ip = string.gsub(ip, "[%[%]]", "")
+        end
+    elseif string.find(ip, "%.") then
+        local colon = string.find(ip, ":", 1, true)
+        if colon then
+            ip = string.sub(ip, 1, colon - 1)
+        end
+    elseif string.find(ip, ":", 1, true) and not string.find(ip, "::", 1, true) then
+        local colon = string.find(ip, ":", 1, true)
+        if colon and not string.find(string.sub(ip, colon + 1), ":", 1, true) then
+            ip = string.sub(ip, 1, colon - 1)
+        end
+    end
+    return string.gsub(ip, "[%[%]]", "")
+end
 
-    if not allowed_ips_config or #allowed_ips_config == 0 then
-        return setmetatable(self, { __index = _M })
+local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6_nets)
+    if not entries or #entries == 0 then
+        return true
     end
 
-    for _, entry in ipairs(allowed_ips_config) do
+    for _, entry in ipairs(entries) do
         local trimmed = string.match(entry, "^%s*(.-)%s*$")
         if trimmed ~= "" then
             local slash_idx = string.find(trimmed, "/", 1, true)
@@ -148,82 +165,131 @@ function _M.new(allowed_ips_config)
                 local bits_str = string.sub(trimmed, slash_idx + 1)
                 local bits = tonumber(bits_str)
                 if not bits then
-                    return nil, string.format("routewarden: invalid CIDR mask in %q", trimmed)
+                    return false, string.format("routewarden: invalid CIDR mask in %q", trimmed)
                 end
 
                 if string.find(ip_part, ":", 1, true) then
                     -- IPv6 CIDR
                     if bits < 0 or bits > 128 then
-                        return nil, string.format("routewarden: invalid IPv6 CIDR bits in %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv6 CIDR bits in %q", trimmed)
                     end
                     local net_bytes = ipv6_to_bytes(ip_part)
                     if not net_bytes then
-                        return nil, string.format("routewarden: invalid IPv6 address in %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv6 address in %q", trimmed)
                     end
-                    table.insert(self.ipv6_nets, { bytes = net_bytes, bits = bits })
+                    table.insert(ipv6_nets, { bytes = net_bytes, bits = bits })
                 else
                     -- IPv4 CIDR
                     if bits < 0 or bits > 32 then
-                        return nil, string.format("routewarden: invalid IPv4 CIDR bits in %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv4 CIDR bits in %q", trimmed)
                     end
                     local ip_num = ipv4_to_num(ip_part)
                     if not ip_num then
-                        return nil, string.format("routewarden: invalid IPv4 address in %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv4 address in %q", trimmed)
                     end
                     local mask = cidr_mask(bits)
-                    table.insert(self.ipv4_nets, { net = bit_and(ip_num, mask), mask = mask })
+                    table.insert(ipv4_nets, { net = bit_and(ip_num, mask), mask = mask })
                 end
             else
                 -- Exact IP
                 if string.find(trimmed, ":", 1, true) then
                     local bytes = ipv6_to_bytes(trimmed)
                     if not bytes then
-                        return nil, string.format("routewarden: invalid IPv6 address %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv6 address %q", trimmed)
                     end
                     local hex_key = ""
                     for _, b in ipairs(bytes) do
                         hex_key = hex_key .. string.format("%02x", b)
                     end
-                    self.ipv6_exact[hex_key] = true
+                    ipv6_exact[hex_key] = true
                 else
                     local num = ipv4_to_num(trimmed)
                     if not num then
-                        return nil, string.format("routewarden: invalid IPv4 address %q", trimmed)
+                        return false, string.format("routewarden: invalid IPv4 address %q", trimmed)
                     end
-                    self.ipv4_exact[num] = true
+                    ipv4_exact[num] = true
                 end
             end
         end
+    end
+    return true
+end
+
+-- Constructor for IPFilter
+function _M.new(allowed_ips_config, trusted_proxies_config)
+    local self = {
+        ipv4_exact = {},
+        ipv4_nets = {},
+        ipv6_exact = {},
+        ipv6_nets = {},
+        trusted_ipv4_exact = {},
+        trusted_ipv4_nets = {},
+        trusted_ipv6_exact = {},
+        trusted_ipv6_nets = {},
+        has_trusted_proxies = false
+    }
+
+    if allowed_ips_config and #allowed_ips_config > 0 then
+        local ok, err = parse_ip_entries(allowed_ips_config, self.ipv4_exact, self.ipv4_nets, self.ipv6_exact, self.ipv6_nets)
+        if not ok then
+            return nil, err
+        end
+    end
+
+    if trusted_proxies_config and #trusted_proxies_config > 0 then
+        local ok, err = parse_ip_entries(trusted_proxies_config, self.trusted_ipv4_exact, self.trusted_ipv4_nets, self.trusted_ipv6_exact, self.trusted_ipv6_nets)
+        if not ok then
+            return nil, err
+        end
+        self.has_trusted_proxies = true
     end
 
     return setmetatable(self, { __index = _M })
 end
 
-local function clean_ip(raw)
-    if not raw or raw == "" then return "" end
-    local ip = string.match(raw, "^%s*(.-)%s*$")
-    if string.sub(ip, 1, 1) == "[" then
-        -- [::1]:8080 or [::1]
-        local bracket_end = string.find(ip, "]", 2, true)
-        if bracket_end then
-            ip = string.sub(ip, 2, bracket_end - 1)
-        else
-            ip = string.gsub(ip, "[%[%]]", "")
+-- Check if remote_addr is in trusted_proxies
+function _M:is_trusted_proxy(remote_addr)
+    if not self.has_trusted_proxies then
+        return true
+    end
+    if not remote_addr or remote_addr == "" then
+        return false
+    end
+
+    local ip = clean_ip(remote_addr)
+    if string.find(ip, ":", 1, true) then
+        local bytes = ipv6_to_bytes(ip)
+        if not bytes then return false end
+
+        local hex_key = ""
+        for _, b in ipairs(bytes) do
+            hex_key = hex_key .. string.format("%02x", b)
         end
-    elseif string.find(ip, "%.") then
-        -- IPv4 with port (e.g. 192.168.1.1:8080)
-        local colon = string.find(ip, ":", 1, true)
-        if colon then
-            ip = string.sub(ip, 1, colon - 1)
+        if self.trusted_ipv6_exact[hex_key] then
+            return true
         end
-    elseif string.find(ip, ":", 1, true) and not string.find(ip, "::", 1, true) then
-        -- check if last segment after colon is port on non-bracketed IPv4 or host
-        local colon = string.find(ip, ":", 1, true)
-        if colon and not string.find(string.sub(ip, colon + 1), ":", 1, true) then
-            ip = string.sub(ip, 1, colon - 1)
+
+        for _, net in ipairs(self.trusted_ipv6_nets) do
+            if ipv6_match_cidr(bytes, net.bytes, net.bits) then
+                return true
+            end
+        end
+    else
+        local num = ipv4_to_num(ip)
+        if not num then return false end
+
+        if self.trusted_ipv4_exact[num] then
+            return true
+        end
+
+        for _, net in ipairs(self.trusted_ipv4_nets) do
+            if bit_and(num, net.mask) == net.net then
+                return true
+            end
         end
     end
-    return string.gsub(ip, "[%[%]]", "")
+
+    return false
 end
 
 -- Is an IP allowed?
@@ -271,9 +337,14 @@ function _M:is_allowed(client_ip_str)
     return false
 end
 
--- Extract Client IP from HTTP headers (X-Forwarded-For, X-Real-IP) or fallback to socket addr
-function _M.extract_client_ip(headers, remote_addr)
-    if headers then
+-- Extract Client IP from HTTP headers (X-Forwarded-For, X-Real-IP) respecting trusted proxies
+function _M.extract_client_ip(headers, remote_addr, trusted_matcher)
+    local is_trusted = true
+    if trusted_matcher and trusted_matcher.has_trusted_proxies then
+        is_trusted = trusted_matcher:is_trusted_proxy(remote_addr)
+    end
+
+    if is_trusted and headers then
         local xff = headers["x-forwarded-for"] or headers["X-Forwarded-For"]
         if xff and xff ~= "" then
             local first_ip = string.match(xff, "^([^,]+)")

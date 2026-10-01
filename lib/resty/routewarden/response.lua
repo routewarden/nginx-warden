@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -217,6 +217,12 @@ function _M:serve(req_ctx)
         if not target or target == "" then
             target = "/"
         end
+        if target ~= "/" and not string.find(target, "^/") then
+            local scheme = string.match(target, "^([%a%d%+%.%-]+):")
+            if not scheme or (string.lower(scheme) ~= "http" and string.lower(scheme) ~= "https") then
+                target = "/"
+            end
+        end
         local code = self.status_code
         if code < 300 or code > 308 then
             code = 302
@@ -256,29 +262,36 @@ function _M:serve(req_ctx)
 
     elseif mode == "gzipbomb" or mode == "bomb" then
         local ct = self.content_type or "text/html; charset=UTF-8"
+        set_header("Content-Type", ct)
         set_header("Content-Encoding", "gzip")
         set_header("X-Content-Type-Options", "nosniff")
         local target_mb = self.gzip_bomb_mb > 0 and self.gzip_bomb_mb or 10
 
-        -- Gzip header + raw deflate blocks
-        local chunk = string.rep("\0", 32 * 1024)
-        local total_chunks = math.floor((target_mb * 1024 * 1024) / #chunk)
+        -- Gzip header + valid DEFLATE blocks of zeroes
+        -- Each 32KB stored DEFLATE block: BFINAL=0, BTYPE=00 (0x00), LEN=32768 (\0\x80), NLEN=32767 (\xff\x7f)
+        local block_len = 32 * 1024
+        local null_chunk = string.rep("\0", block_len)
+        local deflate_chunk = "\0\0\x80\xff\x7f" .. null_chunk
+        local total_chunks = math.floor((target_mb * 1024 * 1024) / block_len)
         if total_chunks <= 0 then total_chunks = 32 end
+        local final_deflate_block = "\x01\x00\x00\xff\xff"
+        local trailer = "\x00\x00\x00\x00\x00\x00\x00\x00"
 
         if req_ctx and req_ctx.respond then
-            req_ctx.respond(self.status_code, ct, generate_gzip_bomb_header())
+            req_ctx.respond(self.status_code, ct, generate_gzip_bomb_header() .. deflate_chunk .. final_deflate_block .. trailer)
             return
         end
 
         if ngx then
             ngx.status = self.status_code
             ngx.print(generate_gzip_bomb_header())
-            -- Stream zero chunks
+            -- Stream valid DEFLATE chunks
             for _ = 1, total_chunks do
-                local ok, err = ngx.print(chunk)
+                local ok, err = ngx.print(deflate_chunk)
                 if not ok then break end
                 ngx.flush(true)
             end
+            ngx.print(final_deflate_block .. trailer)
             return ngx.exit(self.status_code)
         end
         return
@@ -376,6 +389,7 @@ function _M:serve(req_ctx)
 
     elseif mode == "infinitestream" or mode == "garbagestream" then
         local ct = self.content_type or "application/octet-stream"
+        set_header("Content-Type", ct)
         set_header("X-Content-Type-Options", "nosniff")
         local stream_mb = self.stream_size_mb > 0 and self.stream_size_mb or 50
 

@@ -68,5 +68,19 @@ assert(ip_filter.extract_client_ip(h5, "127.0.0.1") == "2001:db8::99")
 local h6 = { ["x-real-ip"] = "[2001:db8::99]" }
 assert(ip_filter.extract_client_ip(h6, "127.0.0.1") == "2001:db8::99")
 
+-- Trusted proxies testing
+local trusted_f = ip_filter.new({ "10.0.0.50" }, { "192.168.1.1", "10.100.0.0/16" })
+assert(trusted_f.has_trusted_proxies == true)
+
+-- Untrusted client connects with spoofed XFF
+local h_spoof = { ["x-forwarded-for"] = "10.0.0.50" }
+assert(ip_filter.extract_client_ip(h_spoof, "203.0.113.99:1234", trusted_f) == "203.0.113.99", "untrusted remote_addr must not spoof XFF")
+assert(trusted_f:is_allowed(ip_filter.extract_client_ip(h_spoof, "203.0.113.99:1234", trusted_f)) == false, "spoofed IP must not be allowed")
+
+-- Trusted proxy forwards whitelisted client IP
+assert(ip_filter.extract_client_ip(h_spoof, "192.168.1.1:5432", trusted_f) == "10.0.0.50", "trusted proxy XFF must be honoured")
+assert(trusted_f:is_allowed(ip_filter.extract_client_ip(h_spoof, "192.168.1.1:5432", trusted_f)) == true, "forwarded IP from trusted proxy must be allowed")
+
 print("All ip_filter tests passed successfully!")
+
 

@@ -2,7 +2,7 @@
 -- Configuration defaults and default sensitive/allow regex patterns
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Default block patterns for sensitive endpoints, files, and credentials
@@ -72,6 +72,7 @@ function _M.default_config()
         block_patterns = {},
         allow_patterns = {},
         allowed_ips = {},
+        trusted_proxies = {},
         methods = { "GET" },
         check_query = false,
         check_headers = {},
