@@ -95,6 +95,12 @@ local test_cases = {
         name = "Dot slash canonical path (/./.env)",
         path = "/./.env",
         expected = { "/.env" }
+    },
+    {
+        name = "Multi-layer encoded RequestURI when path differs",
+        path = "/app",
+        request_uri = "/app/%252e%252e/.env?test=1",
+        expected = { "/.env" }
     }
 }
 

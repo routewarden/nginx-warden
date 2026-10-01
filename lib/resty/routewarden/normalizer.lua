@@ -3,7 +3,7 @@
 -- matrix parameters (;), backslash separators (\), null bytes, and dot traversals.
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Strip query string from a raw URI if present
@@ -92,8 +92,9 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     table.insert(paths_to_check, _M.clean_path(base_path))
 
     -- 1. Add RequestURI path before query to catch gateway discrepancies
+    local raw_uri_path = nil
     if request_uri and request_uri ~= "" then
-        local raw_uri_path = strip_query(request_uri)
+        raw_uri_path = strip_query(request_uri)
         if raw_uri_path ~= "" then
             table.insert(paths_to_check, _M.clean_path(raw_uri_path))
         end
