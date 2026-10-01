@@ -2,7 +2,7 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Simple, robust pure-Lua JSON serializer for logging
@@ -11,10 +11,13 @@ local function json_escape_string(s)
     s = tostring(s)
     local escaped = s:gsub('\\', '\\\\')
                      :gsub('"', '\\"')
-                     :gsub('\n', '\\n')
-                     :gsub('\r', '\\r')
-                     :gsub('\t', '\\t')
-                     :gsub('%z', '\\u0000')
+                     :gsub('[\1-\31%z]', function(c)
+                         if c == '\n' then return '\\n'
+                         elseif c == '\r' then return '\\r'
+                         elseif c == '\t' then return '\\t'
+                         else return string.format('\\u%04x', string.byte(c))
+                         end
+                     end)
     return '"' .. escaped .. '"'
 end
 

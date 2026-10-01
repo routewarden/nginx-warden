@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.2.1"
+    _VERSION = "1.3.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -216,6 +216,8 @@ function _M.new(opts)
         if opts.allow_pattern then cfg.allow_pattern = opts.allow_pattern end
         if opts.allowed_ips then cfg.allowed_ips = opts.allowed_ips end
         if opts.allowed_ip then cfg.allowed_ip = opts.allowed_ip end
+        if opts.trusted_proxies then cfg.trusted_proxies = opts.trusted_proxies end
+        if opts.trusted_proxy then cfg.trusted_proxy = opts.trusted_proxy end
 
         if opts.mode then
             cfg.response.mode = string.lower(opts.mode)
@@ -317,9 +319,13 @@ function _M.new(opts)
     add_entries(all_allowed_ips, cfg.allowed_ips)
     add_entries(all_allowed_ips, cfg.allowed_ip)
 
+    local all_trusted_proxies = {}
+    add_entries(all_trusted_proxies, cfg.trusted_proxies)
+    add_entries(all_trusted_proxies, cfg.trusted_proxy)
+
     local ip_matcher, err
-    if #all_allowed_ips > 0 then
-        ip_matcher, err = ip_filter.new(all_allowed_ips)
+    if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
+        ip_matcher, err = ip_filter.new(all_allowed_ips, all_trusted_proxies)
         if not ip_matcher then
             error("routewarden init error: " .. tostring(err))
         end
@@ -378,7 +384,7 @@ function _M:inspect(req_ctx)
     -- Stage 1: IP Whitelist Check
     local headers = req_ctx.headers or (ngx and ngx.req and ngx.req.get_headers and ngx.req.get_headers()) or {}
     local remote_addr = req_ctx.remote_addr or (ngx and ngx.var and ngx.var.remote_addr) or ""
-    local client_ip = ip_filter.extract_client_ip(headers, remote_addr)
+    local client_ip = ip_filter.extract_client_ip(headers, remote_addr, self.ip_matcher)
 
     if self.ip_matcher then
         if self.ip_matcher:is_allowed(client_ip) then
@@ -444,7 +450,10 @@ function _M:inspect(req_ctx)
         for _, hdr_name in ipairs(self.config.check_headers) do
             local hdr_val = headers[string.lower(hdr_name)] or headers[hdr_name]
             if hdr_val and hdr_val ~= "" then
-                local header_candidates = normalizer.extract_candidate_paths(hdr_val, hdr_val, hdr_val)
+                local header_candidates = { hdr_val }
+                for _, hc in ipairs(normalizer.extract_candidate_paths(hdr_val, hdr_val, hdr_val)) do
+                    table.insert(header_candidates, hc)
+                end
                 for _, hc in ipairs(header_candidates) do
                     for _, block_re in ipairs(self.compiled_block) do
                         if block_re:match(hc) then

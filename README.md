@@ -7,15 +7,15 @@
 <p align="center">
   <a href="https://github.com/routewarden/nginx-warden/actions/workflows/ci.yml"><img src="https://github.com/routewarden/nginx-warden/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-  <a href="https://routewarden.github.io/docs/"><img src="https://img.shields.io/badge/Docs-Wiki-6366f1.svg" alt="Documentation Site" /></a>
-  <a href="https://routewarden.github.io/docs/tools/pattern-checker?format=nginx"><img src="https://img.shields.io/badge/Playground-Live%20Simulation-0ea5e9.svg" alt="Interactive Playground" /></a>
+  <a href="https://routewarden.github.io/"><img src="https://img.shields.io/badge/Docs-Wiki-6366f1.svg" alt="Documentation Site" /></a>
+  <a href="https://routewarden.github.io/tools/pattern-checker?format=nginx"><img src="https://img.shields.io/badge/Playground-Live%20Simulation-0ea5e9.svg" alt="Interactive Playground" /></a>
 </p>
 
 ---
 
-- **Live Playground**: [Try RouteWarden in your browser (NGINX Lua Mode)](https://routewarden.github.io/docs/tools/pattern-checker?format=nginx)
-- **Documentation & Guides**: [https://routewarden.github.io/docs/nginx/](https://routewarden.github.io/docs/nginx/)
-- **Configuration Reference**: [NGINX & OpenResty Reference](https://routewarden.github.io/docs/nginx/configuration)
+- **Live Playground**: [Try RouteWarden in your browser (NGINX Lua Mode)](https://routewarden.github.io/tools/pattern-checker?format=nginx)
+- **Documentation & Guides**: [https://routewarden.github.io/nginx/](https://routewarden.github.io/nginx/)
+- **Configuration Reference**: [NGINX & OpenResty Reference](https://routewarden.github.io/nginx/configuration)
 - **Example Configurations**: [`examples/`](examples/)
 - **Live Multi-Port Testing Suite**: [`samples/`](samples/)
 
