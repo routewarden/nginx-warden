@@ -2,7 +2,7 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.3.0"
+    _VERSION = "1.3.1"
 }
 
 -- Simple, robust pure-Lua JSON serializer for logging
@@ -59,13 +59,16 @@ function _M.log_security_event(event_data, security_log_enabled, custom_sink)
     local payload = {
         type = "routewarden_block",
         timestamp = timestamp,
+        level = "warn",
         plugin = "nginx-warden",
         client_ip = event_data.client_ip or "",
         method = event_data.method or "",
         path = event_data.path or "",
         request_uri = event_data.request_uri or "",
         pattern = event_data.pattern or "",
+        matched_pattern = event_data.pattern or "",
         action = event_data.action or "text",
+        status_code = event_data.status_code or 403,
         reason = event_data.reason or "path_blocked",
         user_agent = event_data.user_agent or ""
     }

@@ -103,6 +103,13 @@ do
     assert(captured.redirected_to == "/login")
     assert(captured.redirect_code == 302)
     assert(captured.headers["Location"] == "/login")
+
+    -- Protocol-relative URLs (//attacker.com) must be safely neutralized to /
+    local h_unsafe = response.new({ mode = "redirect", redirect_url = "//attacker.com/phish", status_code = 302 })
+    local ctx_unsafe, captured_unsafe = create_mock_ctx()
+    h_unsafe:serve(ctx_unsafe)
+    assert(captured_unsafe.redirected_to == "/", "expected //attacker.com to be neutralized to /")
+
     print("  ✓ mode redirect passed")
 end
 

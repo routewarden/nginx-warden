@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.3.0"
+    _VERSION = "1.3.1"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -473,8 +473,14 @@ function _M:inspect(req_ctx)
 
     if is_blocked then
         local action_mode = self.config.response.mode
+        local status_code = 403
         if self.response_handler and self.response_handler.silent_drop then
             action_mode = "silentDrop"
+            status_code = 0
+        elseif self.response_handler and self.response_handler.status_code then
+            status_code = self.response_handler.status_code
+        elseif self.config.response and self.config.response.status_code then
+            status_code = self.config.response.status_code
         end
 
         local block_info = {
@@ -484,6 +490,7 @@ function _M:inspect(req_ctx)
             request_uri = raw_uri,
             pattern = blocked_pattern,
             action = action_mode,
+            status_code = status_code,
             reason = blocked_reason,
             user_agent = (headers and (headers["user-agent"] or headers["User-Agent"])) or ""
         }
