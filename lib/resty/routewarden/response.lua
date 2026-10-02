@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.3.0"
+    _VERSION = "1.3.1"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -214,7 +214,7 @@ function _M:serve(req_ctx)
 
     if mode == "redirect" then
         local target = self.redirect_url
-        if not target or target == "" then
+        if not target or target == "" or string.sub(target, 1, 2) == "//" then
             target = "/"
         end
         if target ~= "/" and not string.find(target, "^/") then
