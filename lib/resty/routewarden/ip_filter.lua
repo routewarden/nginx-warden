@@ -148,7 +148,12 @@ local function clean_ip(raw)
             ip = string.sub(ip, 1, colon - 1)
         end
     end
-    return string.gsub(ip, "[%[%]]", "")
+    ip = string.gsub(ip, "[%[%]]", "")
+    local pct = string.find(ip, "%%", 1, true)
+    if pct then
+        ip = string.sub(ip, 1, pct - 1)
+    end
+    return ip
 end
 
 local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6_nets)
@@ -158,6 +163,10 @@ local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6
 
     for _, entry in ipairs(entries) do
         local trimmed = string.match(entry, "^%s*(.-)%s*$")
+        local pct = string.find(trimmed, "%%", 1, true)
+        if pct then
+            trimmed = string.sub(trimmed, 1, pct - 1)
+        end
         if trimmed ~= "" then
             local slash_idx = string.find(trimmed, "/", 1, true)
             if slash_idx then
