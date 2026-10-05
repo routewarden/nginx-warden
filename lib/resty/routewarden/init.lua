@@ -483,6 +483,17 @@ function _M:inspect(req_ctx)
         if not body_data and ngx and ngx.req and type(ngx.req.read_body) == "function" then
             pcall(ngx.req.read_body)
             body_data = ngx.req.get_body_data()
+            if not body_data and type(ngx.req.get_body_file) == "function" then
+                local file_name = ngx.req.get_body_file()
+                if file_name then
+                    local f = io.open(file_name, "rb")
+                    if f then
+                        local max_bytes = self.config.check_body_max_bytes or 65536
+                        body_data = f:read(max_bytes)
+                        f:close()
+                    end
+                end
+            end
         end
 
         if body_data and type(body_data) == "string" and body_data ~= "" then
