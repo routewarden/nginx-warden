@@ -8,7 +8,7 @@ local routewarden = require("resty.routewarden")
 print("Testing routewarden end-to-end inspection...")
 
 -- Helper to simulate a request
-local function simulate_request(rw, method, raw_uri, uri, headers, query_string, remote_addr)
+local function simulate_request(rw, method, raw_uri, uri, headers, query_string, remote_addr, req_body)
     local headers_tbl = headers or {}
     local captured = {
         status = nil,
@@ -26,6 +26,7 @@ local function simulate_request(rw, method, raw_uri, uri, headers, query_string,
         headers = headers_tbl,
         query_string = query_string or "",
         remote_addr = remote_addr or "127.0.0.1",
+        body = req_body,
         set_header = function(k, v) captured.headers[k] = v end,
         respond = function(s, ct, b) captured.status = s; captured.content_type = ct; captured.body = b end,
         on_silent_drop = function() captured.silent_dropped = true end,
@@ -274,6 +275,34 @@ do
     assert(passed == false)
     assert(logged_payload.action == "silentDrop", "expected action to be silentDrop, got: " .. tostring(logged_payload.action))
     print("  ✓ Action reported as silentDrop for mode silent_drop")
+end
+
+-- 20. Request body inspection (check_body & body_patterns)
+do
+    local rw = routewarden.new({
+        enable_default_patterns = false,
+        methods = { "POST" },
+        check_body = true,
+        body_patterns = { "(?i)grant_type=password" }
+    })
+
+    -- Login attempt with grant_type=password blocked
+    local passed_login, cap_login, info_login = simulate_request(
+        rw, "POST", "/identity/connect/token", "/identity/connect/token",
+        { ["content-type"] = "application/x-www-form-urlencoded" }, "", "127.0.0.1",
+        "grant_type=password&username=admin&password=secret"
+    )
+    assert(passed_login == false, "grant_type=password should be blocked")
+    assert(info_login.reason == "body_blocked")
+
+    -- Send access token grant with grant_type=send_access allowed
+    local passed_send, cap_send, info_send = simulate_request(
+        rw, "POST", "/identity/connect/token", "/identity/connect/token",
+        { ["content-type"] = "application/x-www-form-urlencoded" }, "", "127.0.0.1",
+        "grant_type=send_access&send_id=123&password=pass"
+    )
+    assert(passed_send == true, "grant_type=send_access should be allowed")
+    print("  ✓ Request body inspection (check_body & body_patterns) verified")
 end
 
 print("All routewarden integration tests passed successfully!")

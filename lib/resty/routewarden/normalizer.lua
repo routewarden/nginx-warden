@@ -256,4 +256,7 @@ function _M.extract_query_candidates(raw_query)
     return result
 end
 
+_M.unescape_percent = unescape_percent
+_M.unescape_uri = unescape_percent
+
 return _M
