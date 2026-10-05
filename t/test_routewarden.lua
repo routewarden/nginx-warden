@@ -304,6 +304,81 @@ do
     print("  ✓ Request body inspection (check_body & body_patterns) verified")
 end
 
+-- 21. Custom response headers on block
+do
+    local rw = routewarden.new({
+        response = {
+            mode = "json",
+            headers = {
+                ["X-RouteWarden-Blocked"] = "true",
+                ["X-Security-Policy"] = "strict"
+            }
+        }
+    })
+    local passed, cap = simulate_request(rw, "GET", "/.env")
+    assert(passed == false, "GET /.env should be blocked")
+    assert(cap.headers["X-RouteWarden-Blocked"] == "true", "expected custom header X-RouteWarden-Blocked")
+    assert(cap.headers["X-Security-Policy"] == "strict", "expected custom header X-Security-Policy")
+    print("  ✓ Custom response headers on blocked responses verified")
+end
+
+-- 22. Top-level mode, status_code, and custom_response_text aliases
+do
+    local rw = routewarden.new({
+        mode = "text",
+        status_code = 404,
+        custom_response_text = "Resource not found on this server"
+    })
+    local passed, cap = simulate_request(rw, "GET", "/.env")
+    assert(passed == false, "GET /.env should be blocked")
+    assert(cap.status == 404, "expected top-level status_code 404, got: " .. tostring(cap.status))
+    assert(cap.content_type == "text/plain; charset=utf-8", "expected text/plain content type")
+    assert(cap.body == "Resource not found on this server", "expected custom response text")
+    print("  ✓ Top-level mode, status_code, and custom_response_text aliases verified")
+end
+
+-- 23. Multiple HTTP methods filter (GET, HEAD, POST, PUT)
+do
+    local rw = routewarden.new({
+        methods = { "GET", "HEAD", "POST", "PUT" }
+    })
+    assert(simulate_request(rw, "GET", "/.env") == false, "GET /.env should be blocked")
+    assert(simulate_request(rw, "HEAD", "/.env") == false, "HEAD /.env should be blocked")
+    assert(simulate_request(rw, "POST", "/.env") == false, "POST /.env should be blocked")
+    assert(simulate_request(rw, "PUT", "/.env") == false, "PUT /.env should be blocked")
+    assert(simulate_request(rw, "OPTIONS", "/.env") == true, "OPTIONS /.env should pass")
+    assert(simulate_request(rw, "PATCH", "/.env") == true, "PATCH /.env should pass")
+    print("  ✓ Multi-method filter {GET, HEAD, POST, PUT} verified")
+end
+
+-- 24. IPv6 CIDR allowlist matching
+do
+    local rw = routewarden.new({
+        allowed_ips = { "2001:db8::/32" }
+    })
+    local passed_ipv6 = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db8::cafe]:54321")
+    assert(passed_ipv6 == true, "2001:db8::cafe in 2001:db8::/32 should be allowed")
+
+    local passed_outside = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db9::1]:54321")
+    assert(passed_outside == false, "2001:db9::1 outside CIDR should be blocked")
+    print("  ✓ IPv6 CIDR allowlist matching verified")
+end
+
+-- 25. Response neutrality on allowed requests
+do
+    local rw = routewarden.new({
+        response = {
+            headers = { ["X-Block-Header"] = "blocked" }
+        }
+    })
+    local passed, cap = simulate_request(rw, "GET", "/normal/resource")
+    assert(passed == true, "/normal/resource should be allowed")
+    assert(cap.status == nil, "allowed request should not have status set by routewarden")
+    assert(cap.headers["X-Block-Header"] == nil, "allowed request should not receive block headers")
+    print("  ✓ Allowed request passes cleanly without block modifications")
+end
+
 print("All routewarden integration tests passed successfully!")
+
 
 
