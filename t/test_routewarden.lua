@@ -246,19 +246,18 @@ do
     print("  ✓ Query key and traversal inspection verified")
 end
 
--- 18. Singular directive configuration support (path_pattern, block_pattern, allow_pattern, allowed_ip)
+-- 18. Canonical directives configuration (block_patterns, allow_patterns, allowed_ips)
 do
     local rw = routewarden.new({
-        path_pattern = "(?i)^/singular-path$",
-        block_pattern = "(?i)^/singular-block$",
-        allow_pattern = "(?i)^/singular-allow$",
-        allowed_ip = "192.168.1.99"
+        block_patterns = { "(?i)^/singular-path$", "(?i)^/singular-block$" },
+        allow_patterns = { "(?i)^/singular-allow$" },
+        allowed_ips = { "192.168.1.99" }
     })
-    assert(simulate_request(rw, "GET", "/singular-path") == false, "path_pattern should be blocked")
-    assert(simulate_request(rw, "GET", "/singular-block") == false, "block_pattern should be blocked")
-    assert(simulate_request(rw, "GET", "/singular-allow") == true, "allow_pattern should pass")
-    assert(simulate_request(rw, "GET", "/singular-path", "/singular-path", {}, "", "192.168.1.99") == true, "allowed_ip should bypass")
-    print("  ✓ Singular directive configuration support verified")
+    assert(simulate_request(rw, "GET", "/singular-path") == false, "block_patterns should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-block") == false, "block_patterns should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-allow") == true, "allow_patterns should pass")
+    assert(simulate_request(rw, "GET", "/singular-path", "/singular-path", {}, "", "192.168.1.99") == true, "allowed_ips should bypass")
+    print("  ✓ Canonical directives configuration verified")
 end
 
 -- 19. Action reporting for silent_drop
@@ -283,7 +282,7 @@ do
         enable_default_patterns = false,
         methods = { "POST" },
         check_body = true,
-        body_patterns = { "(?i)grant_type=password" }
+        check_body_patterns = { "(?i)grant_type=password" }
     })
 
     -- Login attempt with grant_type=password blocked

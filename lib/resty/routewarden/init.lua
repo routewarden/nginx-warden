@@ -199,9 +199,7 @@ function _M.new(opts)
     if opts and type(opts) == "table" then
         if opts.enabled ~= nil then cfg.enabled = opts.enabled end
         if opts.enable_default_patterns ~= nil then cfg.enable_default_patterns = opts.enable_default_patterns end
-        if opts.disable_default_patterns ~= nil then cfg.enable_default_patterns = not opts.disable_default_patterns end
         if opts.enable_default_allow_patterns ~= nil then cfg.enable_default_allow_patterns = opts.enable_default_allow_patterns end
-        if opts.disable_default_allow_patterns ~= nil then cfg.enable_default_allow_patterns = not opts.disable_default_allow_patterns end
         if opts.check_query ~= nil then cfg.check_query = opts.check_query end
         if opts.debug ~= nil then cfg.debug = opts.debug end
         if opts.security_log ~= nil then cfg.security_log = opts.security_log end
@@ -213,24 +211,13 @@ function _M.new(opts)
         if opts.check_body ~= nil then cfg.check_body = opts.check_body end
         if opts.check_body_max_bytes then cfg.check_body_max_bytes = opts.check_body_max_bytes end
         if opts.check_body_patterns then cfg.check_body_patterns = opts.check_body_patterns end
-        if opts.check_body_pattern then cfg.check_body_pattern = opts.check_body_pattern end
-        if opts.body_patterns then cfg.body_patterns = opts.body_patterns end
-        if opts.body_pattern then cfg.body_pattern = opts.body_pattern end
-        if opts.path_patterns then cfg.path_patterns = opts.path_patterns end
-        if opts.path_pattern then cfg.path_pattern = opts.path_pattern end
         if opts.block_patterns then cfg.block_patterns = opts.block_patterns end
-        if opts.block_pattern then cfg.block_pattern = opts.block_pattern end
         if opts.allow_patterns then cfg.allow_patterns = opts.allow_patterns end
-        if opts.allow_pattern then cfg.allow_pattern = opts.allow_pattern end
         if opts.allowed_ips then cfg.allowed_ips = opts.allowed_ips end
-        if opts.allowed_ip then cfg.allowed_ip = opts.allowed_ip end
         if opts.trusted_proxies then cfg.trusted_proxies = opts.trusted_proxies end
-        if opts.trusted_proxy then cfg.trusted_proxy = opts.trusted_proxy end
 
         if opts.mode then
             cfg.response.mode = string.lower(opts.mode)
-        elseif opts.action then
-            cfg.response.mode = string.lower(opts.action)
         end
 
         if opts.response then
@@ -285,10 +272,7 @@ function _M.new(opts)
             table.insert(all_block_patterns, p)
         end
     end
-    add_entries(all_block_patterns, cfg.path_patterns)
     add_entries(all_block_patterns, cfg.block_patterns)
-    add_entries(all_block_patterns, cfg.path_pattern)
-    add_entries(all_block_patterns, cfg.block_pattern)
 
     local compiled_block = {}
     for _, p in ipairs(all_block_patterns) do
@@ -309,7 +293,6 @@ function _M.new(opts)
         end
     end
     add_entries(all_allow_patterns, cfg.allow_patterns)
-    add_entries(all_allow_patterns, cfg.allow_pattern)
 
     local compiled_allow = {}
     for _, p in ipairs(all_allow_patterns) do
@@ -325,9 +308,6 @@ function _M.new(opts)
     -- Compile body patterns
     local all_body_patterns = {}
     add_entries(all_body_patterns, cfg.check_body_patterns)
-    add_entries(all_body_patterns, cfg.check_body_pattern)
-    add_entries(all_body_patterns, cfg.body_patterns)
-    add_entries(all_body_patterns, cfg.body_pattern)
 
     local compiled_body = {}
     for _, p in ipairs(all_body_patterns) do
@@ -343,11 +323,9 @@ function _M.new(opts)
     -- Initialize IP Filter
     local all_allowed_ips = {}
     add_entries(all_allowed_ips, cfg.allowed_ips)
-    add_entries(all_allowed_ips, cfg.allowed_ip)
 
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
-    add_entries(all_trusted_proxies, cfg.trusted_proxy)
 
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then

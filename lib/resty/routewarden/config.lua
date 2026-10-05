@@ -68,7 +68,6 @@ function _M.default_config()
         enabled = true,
         enable_default_patterns = true,
         enable_default_allow_patterns = true,
-        path_patterns = {},
         block_patterns = {},
         allow_patterns = {},
         allowed_ips = {},
