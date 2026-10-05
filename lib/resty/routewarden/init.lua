@@ -199,7 +199,9 @@ function _M.new(opts)
     if opts and type(opts) == "table" then
         if opts.enabled ~= nil then cfg.enabled = opts.enabled end
         if opts.enable_default_patterns ~= nil then cfg.enable_default_patterns = opts.enable_default_patterns end
+        if opts.disable_default_patterns ~= nil then cfg.enable_default_patterns = not opts.disable_default_patterns end
         if opts.enable_default_allow_patterns ~= nil then cfg.enable_default_allow_patterns = opts.enable_default_allow_patterns end
+        if opts.disable_default_allow_patterns ~= nil then cfg.enable_default_allow_patterns = not opts.disable_default_allow_patterns end
         if opts.check_query ~= nil then cfg.check_query = opts.check_query end
         if opts.debug ~= nil then cfg.debug = opts.debug end
         if opts.security_log ~= nil then cfg.security_log = opts.security_log end
