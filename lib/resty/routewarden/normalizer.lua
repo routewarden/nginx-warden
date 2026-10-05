@@ -3,7 +3,7 @@
 -- matrix parameters (;), backslash separators (\), null bytes, and dot traversals.
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Strip query string from a raw URI if present

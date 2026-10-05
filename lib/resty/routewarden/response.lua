@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly

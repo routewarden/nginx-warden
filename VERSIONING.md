@@ -10,7 +10,7 @@ The canonical version of RouteWarden for NGINX is stored in [`version.json`](ver
 
 ```json
 {
-  "version": "v1.3.1"
+  "version": "v1.4.0"
 }
 ```
 

@@ -2,7 +2,7 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Simple, robust pure-Lua JSON serializer for logging

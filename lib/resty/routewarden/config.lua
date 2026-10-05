@@ -2,7 +2,7 @@
 -- Configuration defaults and default sensitive/allow regex patterns
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Default block patterns for sensitive endpoints, files, and credentials
