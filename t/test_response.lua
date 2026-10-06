@@ -16,7 +16,8 @@ local function create_mock_ctx(uri)
         body = nil,
         silent_dropped = false,
         redirected_to = nil,
-        redirect_code = nil
+        redirect_code = nil,
+        proxied_to = nil
     }
 
     local ctx = {
@@ -35,6 +36,9 @@ local function create_mock_ctx(uri)
         redirect = function(target, code)
             captured.redirected_to = target
             captured.redirect_code = code
+        end,
+        proxy = function(target)
+            captured.proxied_to = target
         end
     }
 
@@ -236,6 +240,34 @@ do
     assert(captured.headers["X-InjectedHeader"] == "valueSet-Cookie: evil=1")
     assert(captured.headers["X-Injected\r\nHeader"] == nil)
     print("  ✓ CRLF header sanitization passed")
+end
+
+-- 15. Proxy valid internal location & upstream URL (Boundary Security Test)
+do
+    local h = response.new({ mode = "proxy", proxy_url = "/internal_honeypot\r\n" })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.proxied_to == "/internal_honeypot")
+    print("  ✓ mode proxy valid internal location and CRLF strip passed")
+end
+
+-- 16. Proxy unsafe schemes rejection (Boundary Security Test)
+do
+    local unsafe_targets = {
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<html>",
+        "//attacker.com/evil",
+        "ftp://honeypot.local"
+    }
+    for _, target in ipairs(unsafe_targets) do
+        local h = response.new({ mode = "proxy", proxy_url = target })
+        local ctx, captured = create_mock_ctx()
+        h:serve(ctx)
+        assert(captured.status == 502)
+        assert(captured.proxied_to == nil)
+    end
+    print("  ✓ mode proxy unsafe schemes rejection passed")
 end
 
 print("All response mode tests passed successfully!")
