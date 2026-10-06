@@ -16,9 +16,12 @@ local function strip_query(str)
     return str
 end
 
--- Percent-unescape a string (%XX)
+-- Percent-unescape a string (%XX) using OpenResty ngx.unescape_uri where available
 local function unescape_percent(str)
     if not str then return "" end
+    if ngx and ngx.unescape_uri then
+        return ngx.unescape_uri(str)
+    end
     return (string.gsub(str, "%%(%x%x)", function(h)
         local code = tonumber(h, 16)
         if code then
