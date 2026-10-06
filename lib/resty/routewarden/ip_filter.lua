@@ -19,14 +19,9 @@ end
 
 -- Convert 32-bit CIDR mask bits (0-32) to numeric mask
 local function cidr_mask(bits)
-    if bits == 0 then return 0 end
-    local mask = 0
-    local cur = 2147483648 -- 2^31
-    for _ = 1, bits do
-        mask = mask + cur
-        cur = cur / 2
-    end
-    return mask
+    if not bits or bits <= 0 then return 0 end
+    if bits >= 32 then return 4294967295 end
+    return 4294967296 - (2 ^ (32 - bits))
 end
 
 -- Bitwise AND: use standard LuaJIT bit.band in OpenResty, native '&' in modern Lua, with fallback
@@ -128,12 +123,7 @@ local function ipv6_match_cidr(ip_bytes, net_bytes, mask_bits)
 
     if rem_bits > 0 then
         local idx = full_bytes + 1
-        local mask = 0
-        local cur = 128
-        for _ = 1, rem_bits do
-            mask = mask + cur
-            cur = cur / 2
-        end
+        local mask = 256 - (2 ^ (8 - rem_bits))
         if bit_and(ip_bytes[idx], mask) ~= bit_and(net_bytes[idx], mask) then
             return false
         end
