@@ -29,22 +29,37 @@ local function cidr_mask(bits)
     return mask
 end
 
--- Bitwise AND for numbers within 32-bit integer range
-local function bit_and(a, b)
-    local res = 0
-    local p = 1
-    for _ = 1, 32 do
-        local ra = a % 2
-        local rb = b % 2
-        if ra == 1 and rb == 1 then
-            res = res + p
-        end
-        a = math.floor(a / 2)
-        b = math.floor(b / 2)
-        p = p * 2
-        if a == 0 or b == 0 then break end
+-- Bitwise AND: use standard LuaJIT bit.band in OpenResty, native '&' in modern Lua, with fallback
+local bit_and
+local has_bit, bit = pcall(require, "bit")
+if has_bit and bit and bit.band then
+    bit_and = function(a, b)
+        local r = bit.band(a, b)
+        if r < 0 then return r + 4294967296 end
+        return r
     end
-    return res
+else
+    local ok, native_band = pcall(load, "return function(a, b) return a & b end")
+    if ok and type(native_band) == "function" then
+        bit_and = native_band()
+    else
+        bit_and = function(a, b)
+            local res = 0
+            local p = 1
+            for _ = 1, 32 do
+                local ra = a % 2
+                local rb = b % 2
+                if ra == 1 and rb == 1 then
+                    res = res + p
+                end
+                a = math.floor(a / 2)
+                b = math.floor(b / 2)
+                p = p * 2
+                if a == 0 or b == 0 then break end
+            end
+            return res
+        end
+    end
 end
 
 -- Expand and parse IPv6 string to 16-byte array
