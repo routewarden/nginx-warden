@@ -8,7 +8,7 @@ local routewarden = require("resty.routewarden")
 print("Testing routewarden end-to-end inspection...")
 
 -- Helper to simulate a request
-local function simulate_request(rw, method, raw_uri, uri, headers, query_string, remote_addr)
+local function simulate_request(rw, method, raw_uri, uri, headers, query_string, remote_addr, req_body)
     local headers_tbl = headers or {}
     local captured = {
         status = nil,
@@ -26,6 +26,7 @@ local function simulate_request(rw, method, raw_uri, uri, headers, query_string,
         headers = headers_tbl,
         query_string = query_string or "",
         remote_addr = remote_addr or "127.0.0.1",
+        body = req_body,
         set_header = function(k, v) captured.headers[k] = v end,
         respond = function(s, ct, b) captured.status = s; captured.content_type = ct; captured.body = b end,
         on_silent_drop = function() captured.silent_dropped = true end,
@@ -245,19 +246,18 @@ do
     print("  ✓ Query key and traversal inspection verified")
 end
 
--- 18. Singular directive configuration support (path_pattern, block_pattern, allow_pattern, allowed_ip)
+-- 18. Canonical directives configuration (block_patterns, allow_patterns, allowed_ips)
 do
     local rw = routewarden.new({
-        path_pattern = "(?i)^/singular-path$",
-        block_pattern = "(?i)^/singular-block$",
-        allow_pattern = "(?i)^/singular-allow$",
-        allowed_ip = "192.168.1.99"
+        block_patterns = { "(?i)^/singular-path$", "(?i)^/singular-block$" },
+        allow_patterns = { "(?i)^/singular-allow$" },
+        allowed_ips = { "192.168.1.99" }
     })
-    assert(simulate_request(rw, "GET", "/singular-path") == false, "path_pattern should be blocked")
-    assert(simulate_request(rw, "GET", "/singular-block") == false, "block_pattern should be blocked")
-    assert(simulate_request(rw, "GET", "/singular-allow") == true, "allow_pattern should pass")
-    assert(simulate_request(rw, "GET", "/singular-path", "/singular-path", {}, "", "192.168.1.99") == true, "allowed_ip should bypass")
-    print("  ✓ Singular directive configuration support verified")
+    assert(simulate_request(rw, "GET", "/singular-path") == false, "block_patterns should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-block") == false, "block_patterns should be blocked")
+    assert(simulate_request(rw, "GET", "/singular-allow") == true, "allow_patterns should pass")
+    assert(simulate_request(rw, "GET", "/singular-path", "/singular-path", {}, "", "192.168.1.99") == true, "allowed_ips should bypass")
+    print("  ✓ Canonical directives configuration verified")
 end
 
 -- 19. Action reporting for silent_drop
@@ -276,6 +276,109 @@ do
     print("  ✓ Action reported as silentDrop for mode silent_drop")
 end
 
+-- 20. Request body inspection (check_body & body_patterns)
+do
+    local rw = routewarden.new({
+        enable_default_patterns = false,
+        methods = { "POST" },
+        check_body = true,
+        check_body_patterns = { "(?i)grant_type=password" }
+    })
+
+    -- Login attempt with grant_type=password blocked
+    local passed_login, cap_login, info_login = simulate_request(
+        rw, "POST", "/identity/connect/token", "/identity/connect/token",
+        { ["content-type"] = "application/x-www-form-urlencoded" }, "", "127.0.0.1",
+        "grant_type=password&username=admin&password=secret"
+    )
+    assert(passed_login == false, "grant_type=password should be blocked")
+    assert(info_login.reason == "body_blocked")
+
+    -- Send access token grant with grant_type=send_access allowed
+    local passed_send, cap_send, info_send = simulate_request(
+        rw, "POST", "/identity/connect/token", "/identity/connect/token",
+        { ["content-type"] = "application/x-www-form-urlencoded" }, "", "127.0.0.1",
+        "grant_type=send_access&send_id=123&password=pass"
+    )
+    assert(passed_send == true, "grant_type=send_access should be allowed")
+    print("  ✓ Request body inspection (check_body & body_patterns) verified")
+end
+
+-- 21. Custom response headers on block
+do
+    local rw = routewarden.new({
+        response = {
+            mode = "json",
+            headers = {
+                ["X-RouteWarden-Blocked"] = "true",
+                ["X-Security-Policy"] = "strict"
+            }
+        }
+    })
+    local passed, cap = simulate_request(rw, "GET", "/.env")
+    assert(passed == false, "GET /.env should be blocked")
+    assert(cap.headers["X-RouteWarden-Blocked"] == "true", "expected custom header X-RouteWarden-Blocked")
+    assert(cap.headers["X-Security-Policy"] == "strict", "expected custom header X-Security-Policy")
+    print("  ✓ Custom response headers on blocked responses verified")
+end
+
+-- 22. Top-level mode, status_code, and custom_response_text aliases
+do
+    local rw = routewarden.new({
+        mode = "text",
+        status_code = 404,
+        custom_response_text = "Resource not found on this server"
+    })
+    local passed, cap = simulate_request(rw, "GET", "/.env")
+    assert(passed == false, "GET /.env should be blocked")
+    assert(cap.status == 404, "expected top-level status_code 404, got: " .. tostring(cap.status))
+    assert(cap.content_type == "text/plain; charset=utf-8", "expected text/plain content type")
+    assert(cap.body == "Resource not found on this server", "expected custom response text")
+    print("  ✓ Top-level mode, status_code, and custom_response_text aliases verified")
+end
+
+-- 23. Multiple HTTP methods filter (GET, HEAD, POST, PUT)
+do
+    local rw = routewarden.new({
+        methods = { "GET", "HEAD", "POST", "PUT" }
+    })
+    assert(simulate_request(rw, "GET", "/.env") == false, "GET /.env should be blocked")
+    assert(simulate_request(rw, "HEAD", "/.env") == false, "HEAD /.env should be blocked")
+    assert(simulate_request(rw, "POST", "/.env") == false, "POST /.env should be blocked")
+    assert(simulate_request(rw, "PUT", "/.env") == false, "PUT /.env should be blocked")
+    assert(simulate_request(rw, "OPTIONS", "/.env") == true, "OPTIONS /.env should pass")
+    assert(simulate_request(rw, "PATCH", "/.env") == true, "PATCH /.env should pass")
+    print("  ✓ Multi-method filter {GET, HEAD, POST, PUT} verified")
+end
+
+-- 24. IPv6 CIDR allowlist matching
+do
+    local rw = routewarden.new({
+        allowed_ips = { "2001:db8::/32" }
+    })
+    local passed_ipv6 = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db8::cafe]:54321")
+    assert(passed_ipv6 == true, "2001:db8::cafe in 2001:db8::/32 should be allowed")
+
+    local passed_outside = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db9::1]:54321")
+    assert(passed_outside == false, "2001:db9::1 outside CIDR should be blocked")
+    print("  ✓ IPv6 CIDR allowlist matching verified")
+end
+
+-- 25. Response neutrality on allowed requests
+do
+    local rw = routewarden.new({
+        response = {
+            headers = { ["X-Block-Header"] = "blocked" }
+        }
+    })
+    local passed, cap = simulate_request(rw, "GET", "/normal/resource")
+    assert(passed == true, "/normal/resource should be allowed")
+    assert(cap.status == nil, "allowed request should not have status set by routewarden")
+    assert(cap.headers["X-Block-Header"] == nil, "allowed request should not receive block headers")
+    print("  ✓ Allowed request passes cleanly without block modifications")
+end
+
 print("All routewarden integration tests passed successfully!")
+
 
 

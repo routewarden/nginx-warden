@@ -3,7 +3,7 @@
 -- and trusted proxy validation.
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number
@@ -19,32 +19,42 @@ end
 
 -- Convert 32-bit CIDR mask bits (0-32) to numeric mask
 local function cidr_mask(bits)
-    if bits == 0 then return 0 end
-    local mask = 0
-    local cur = 2147483648 -- 2^31
-    for _ = 1, bits do
-        mask = mask + cur
-        cur = cur / 2
-    end
-    return mask
+    if not bits or bits <= 0 then return 0 end
+    if bits >= 32 then return 4294967295 end
+    return 4294967296 - (2 ^ (32 - bits))
 end
 
--- Bitwise AND for numbers within 32-bit integer range
-local function bit_and(a, b)
-    local res = 0
-    local p = 1
-    for _ = 1, 32 do
-        local ra = a % 2
-        local rb = b % 2
-        if ra == 1 and rb == 1 then
-            res = res + p
-        end
-        a = math.floor(a / 2)
-        b = math.floor(b / 2)
-        p = p * 2
-        if a == 0 or b == 0 then break end
+-- Bitwise AND: use standard LuaJIT bit.band in OpenResty, native '&' in modern Lua, with fallback
+local bit_and
+local has_bit, bit = pcall(require, "bit")
+if has_bit and bit and bit.band then
+    bit_and = function(a, b)
+        local r = bit.band(a, b)
+        if r < 0 then return r + 4294967296 end
+        return r
     end
-    return res
+else
+    local ok, native_band = pcall(load, "return function(a, b) return a & b end")
+    if ok and type(native_band) == "function" then
+        bit_and = native_band()
+    else
+        bit_and = function(a, b)
+            local res = 0
+            local p = 1
+            for _ = 1, 32 do
+                local ra = a % 2
+                local rb = b % 2
+                if ra == 1 and rb == 1 then
+                    res = res + p
+                end
+                a = math.floor(a / 2)
+                b = math.floor(b / 2)
+                p = p * 2
+                if a == 0 or b == 0 then break end
+            end
+            return res
+        end
+    end
 end
 
 -- Expand and parse IPv6 string to 16-byte array
@@ -113,12 +123,7 @@ local function ipv6_match_cidr(ip_bytes, net_bytes, mask_bits)
 
     if rem_bits > 0 then
         local idx = full_bytes + 1
-        local mask = 0
-        local cur = 128
-        for _ = 1, rem_bits do
-            mask = mask + cur
-            cur = cur / 2
-        end
+        local mask = 256 - (2 ^ (8 - rem_bits))
         if bit_and(ip_bytes[idx], mask) ~= bit_and(net_bytes[idx], mask) then
             return false
         end
@@ -148,7 +153,12 @@ local function clean_ip(raw)
             ip = string.sub(ip, 1, colon - 1)
         end
     end
-    return string.gsub(ip, "[%[%]]", "")
+    ip = string.gsub(ip, "[%[%]]", "")
+    local pct = string.find(ip, "%%", 1, true)
+    if pct then
+        ip = string.sub(ip, 1, pct - 1)
+    end
+    return ip
 end
 
 local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6_nets)
@@ -158,6 +168,10 @@ local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6
 
     for _, entry in ipairs(entries) do
         local trimmed = string.match(entry, "^%s*(.-)%s*$")
+        local pct = string.find(trimmed, "%%", 1, true)
+        if pct then
+            trimmed = string.sub(trimmed, 1, pct - 1)
+        end
         if trimmed ~= "" then
             local slash_idx = string.find(trimmed, "/", 1, true)
             if slash_idx then

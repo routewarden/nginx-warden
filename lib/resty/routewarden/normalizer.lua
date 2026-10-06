@@ -3,7 +3,7 @@
 -- matrix parameters (;), backslash separators (\), null bytes, and dot traversals.
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Strip query string from a raw URI if present
@@ -16,9 +16,12 @@ local function strip_query(str)
     return str
 end
 
--- Percent-unescape a string (%XX)
+-- Percent-unescape a string (%XX) using OpenResty ngx.unescape_uri where available
 local function unescape_percent(str)
     if not str then return "" end
+    if ngx and ngx.unescape_uri then
+        return ngx.unescape_uri(str)
+    end
     return (string.gsub(str, "%%(%x%x)", function(h)
         local code = tonumber(h, 16)
         if code then
@@ -26,25 +29,6 @@ local function unescape_percent(str)
         end
         return "%" .. h
     end))
-end
-
--- Split string by delimiter
-local function split(str, delimiter)
-    local result = {}
-    local pattern = "(.-)" .. delimiter
-    local last_end = 1
-    local s, e, cap = string.find(str, pattern, 1)
-    while s do
-        if s ~= 1 or cap ~= "" then
-            table.insert(result, cap)
-        end
-        last_end = e + 1
-        s, e, cap = string.find(str, pattern, last_end)
-    end
-    if last_end <= #str then
-        table.insert(result, string.sub(str, last_end))
-    end
-    return result
 end
 
 -- Canonical path cleaner (equivalent to Go path.Clean)
@@ -255,5 +239,8 @@ function _M.extract_query_candidates(raw_query)
 
     return result
 end
+
+_M.unescape_percent = unescape_percent
+_M.unescape_uri = unescape_percent
 
 return _M

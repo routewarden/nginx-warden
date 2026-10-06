@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -190,9 +190,15 @@ function _M:serve(req_ctx)
         end
     end
 
-    -- Set custom headers
+    -- Set custom headers (sanitized against CRLF injection / HTTP response splitting)
     for k, v in pairs(self.headers) do
-        set_header(k, v)
+        if type(k) == "string" and type(v) == "string" then
+            local clean_k = string.gsub(string.gsub(k, "\r", ""), "\n", "")
+            local clean_v = string.gsub(string.gsub(v, "\r", ""), "\n", "")
+            if clean_k ~= "" then
+                set_header(clean_k, clean_v)
+            end
+        end
     end
 
     local function send_resp(status, content_type, body_content)
@@ -382,8 +388,30 @@ function _M:serve(req_ctx)
         return send_resp(self.status_code, ct, body)
 
     elseif mode == "proxy" or mode == "mirror" then
-        if self.proxy_url and ngx then
-            return ngx.exec(self.proxy_url)
+        local target = self.proxy_url
+        if target and type(target) == "string" then
+            -- Sanitize CRLF
+            target = string.gsub(string.gsub(target, "\r", ""), "\n", "")
+            -- Safe targets: internal locations (/... or @...) or http/https URLs
+            local is_internal = (string.find(target, "^/") ~= nil) or (string.find(target, "^@") ~= nil)
+            local is_http = (string.find(target, "^https?://") ~= nil)
+            if string.sub(target, 1, 2) == "//" or (not is_internal and not is_http) then
+                target = nil
+            end
+        else
+            target = nil
+        end
+
+        if not target then
+            return send_resp(502, "text/plain; charset=utf-8", "Honeypot proxy destination unavailable")
+        end
+
+        if req_ctx and req_ctx.proxy then
+            return req_ctx.proxy(target)
+        end
+
+        if ngx then
+            return ngx.exec(target)
         end
         return send_resp(502, "text/plain; charset=utf-8", "Honeypot proxy destination unavailable")
 

@@ -2,10 +2,22 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
--- Simple, robust pure-Lua JSON serializer for logging
+-- Check for standard OpenResty cjson / cjson.safe encoder
+local cjson_encode
+local ok, cjson = pcall(require, "cjson.safe")
+if ok and cjson and cjson.encode then
+    cjson_encode = cjson.encode
+else
+    local ok2, cjson2 = pcall(require, "cjson")
+    if ok2 and cjson2 and cjson2.encode then
+        cjson_encode = cjson2.encode
+    end
+end
+
+-- Simple, robust pure-Lua JSON serializer fallback for standalone environments
 local function json_escape_string(s)
     if s == nil then return '""' end
     s = tostring(s)
@@ -22,6 +34,13 @@ local function json_escape_string(s)
 end
 
 function _M.to_json(tbl)
+    if cjson_encode then
+        local res, _ = cjson_encode(tbl)
+        if res then
+            return res
+        end
+    end
+
     local parts = {}
     for k, v in pairs(tbl) do
         local key_str = json_escape_string(tostring(k))

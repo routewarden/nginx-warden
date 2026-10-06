@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -208,21 +208,16 @@ function _M.new(opts)
 
         if opts.methods then cfg.methods = opts.methods end
         if opts.check_headers then cfg.check_headers = opts.check_headers end
-        if opts.path_patterns then cfg.path_patterns = opts.path_patterns end
-        if opts.path_pattern then cfg.path_pattern = opts.path_pattern end
+        if opts.check_body ~= nil then cfg.check_body = opts.check_body end
+        if opts.check_body_max_bytes then cfg.check_body_max_bytes = opts.check_body_max_bytes end
+        if opts.check_body_patterns then cfg.check_body_patterns = opts.check_body_patterns end
         if opts.block_patterns then cfg.block_patterns = opts.block_patterns end
-        if opts.block_pattern then cfg.block_pattern = opts.block_pattern end
         if opts.allow_patterns then cfg.allow_patterns = opts.allow_patterns end
-        if opts.allow_pattern then cfg.allow_pattern = opts.allow_pattern end
         if opts.allowed_ips then cfg.allowed_ips = opts.allowed_ips end
-        if opts.allowed_ip then cfg.allowed_ip = opts.allowed_ip end
         if opts.trusted_proxies then cfg.trusted_proxies = opts.trusted_proxies end
-        if opts.trusted_proxy then cfg.trusted_proxy = opts.trusted_proxy end
 
         if opts.mode then
             cfg.response.mode = string.lower(opts.mode)
-        elseif opts.action then
-            cfg.response.mode = string.lower(opts.action)
         end
 
         if opts.response then
@@ -277,10 +272,7 @@ function _M.new(opts)
             table.insert(all_block_patterns, p)
         end
     end
-    add_entries(all_block_patterns, cfg.path_patterns)
     add_entries(all_block_patterns, cfg.block_patterns)
-    add_entries(all_block_patterns, cfg.path_pattern)
-    add_entries(all_block_patterns, cfg.block_pattern)
 
     local compiled_block = {}
     for _, p in ipairs(all_block_patterns) do
@@ -301,7 +293,6 @@ function _M.new(opts)
         end
     end
     add_entries(all_allow_patterns, cfg.allow_patterns)
-    add_entries(all_allow_patterns, cfg.allow_pattern)
 
     local compiled_allow = {}
     for _, p in ipairs(all_allow_patterns) do
@@ -314,14 +305,27 @@ function _M.new(opts)
         end
     end
 
+    -- Compile body patterns
+    local all_body_patterns = {}
+    add_entries(all_body_patterns, cfg.check_body_patterns)
+
+    local compiled_body = {}
+    for _, p in ipairs(all_body_patterns) do
+        local trimmed = string.match(p, "^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            local compiled = compile_regex(trimmed)
+            if compiled then
+                table.insert(compiled_body, compiled)
+            end
+        end
+    end
+
     -- Initialize IP Filter
     local all_allowed_ips = {}
     add_entries(all_allowed_ips, cfg.allowed_ips)
-    add_entries(all_allowed_ips, cfg.allowed_ip)
 
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
-    add_entries(all_trusted_proxies, cfg.trusted_proxy)
 
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
@@ -339,6 +343,7 @@ function _M.new(opts)
         methods = methods_map,
         compiled_block = compiled_block,
         compiled_allow = compiled_allow,
+        compiled_body = compiled_body,
         ip_matcher = ip_matcher,
         response_handler = resp_handler,
         custom_log_sink = nil
@@ -468,6 +473,58 @@ function _M:inspect(req_ctx)
                 end
             end
             if is_blocked then break end
+        end
+    end
+
+    -- Optional Body Inspection (supports OpenResty ngx.req.read_body / ngx.req.get_body_data or mocked req_ctx.body)
+    local should_check_body = (self.config.check_body or (self.compiled_body and #self.compiled_body > 0))
+    if not is_blocked and should_check_body then
+        local body_data = req_ctx.body
+        if not body_data and ngx and ngx.req and type(ngx.req.read_body) == "function" then
+            pcall(ngx.req.read_body)
+            body_data = ngx.req.get_body_data()
+            if not body_data and type(ngx.req.get_body_file) == "function" then
+                local file_name = ngx.req.get_body_file()
+                if file_name then
+                    local f = io.open(file_name, "rb")
+                    if f then
+                        local max_bytes = self.config.check_body_max_bytes or 65536
+                        body_data = f:read(max_bytes)
+                        f:close()
+                    end
+                end
+            end
+        end
+
+        if body_data and type(body_data) == "string" and body_data ~= "" then
+            local max_bytes = self.config.check_body_max_bytes or 65536
+            if string.len(body_data) > max_bytes then
+                body_data = string.sub(body_data, 1, max_bytes)
+            end
+
+            local unescaped_body = normalizer.unescape_uri(body_data)
+            local body_candidates = { body_data }
+            if unescaped_body and unescaped_body ~= body_data then
+                table.insert(body_candidates, unescaped_body)
+            end
+
+            local patterns_to_check = self.compiled_body
+            if not patterns_to_check or #patterns_to_check == 0 then
+                patterns_to_check = self.compiled_block
+            end
+
+            for _, bc in ipairs(body_candidates) do
+                for _, re in ipairs(patterns_to_check) do
+                    if re:match(bc) then
+                        is_blocked = true
+                        blocked_pattern = re.pattern
+                        blocked_target = "[body payload]"
+                        blocked_reason = "body_blocked"
+                        break
+                    end
+                end
+                if is_blocked then break end
+            end
         end
     end
 

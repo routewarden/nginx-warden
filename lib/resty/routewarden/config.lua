@@ -2,7 +2,7 @@
 -- Configuration defaults and default sensitive/allow regex patterns
 
 local _M = {
-    _VERSION = "1.3.1"
+    _VERSION = "1.4.0"
 }
 
 -- Default block patterns for sensitive endpoints, files, and credentials
@@ -68,7 +68,6 @@ function _M.default_config()
         enabled = true,
         enable_default_patterns = true,
         enable_default_allow_patterns = true,
-        path_patterns = {},
         block_patterns = {},
         allow_patterns = {},
         allowed_ips = {},
@@ -76,6 +75,9 @@ function _M.default_config()
         methods = { "GET" },
         check_query = false,
         check_headers = {},
+        check_body = false,
+        check_body_max_bytes = 65536,
+        check_body_patterns = {},
         status_code = nil,
         custom_response_text = nil,
         debug = false,
