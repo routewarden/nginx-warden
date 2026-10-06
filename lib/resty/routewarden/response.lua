@@ -190,9 +190,15 @@ function _M:serve(req_ctx)
         end
     end
 
-    -- Set custom headers
+    -- Set custom headers (sanitized against CRLF injection / HTTP response splitting)
     for k, v in pairs(self.headers) do
-        set_header(k, v)
+        if type(k) == "string" and type(v) == "string" then
+            local clean_k = string.gsub(string.gsub(k, "\r", ""), "\n", "")
+            local clean_v = string.gsub(string.gsub(v, "\r", ""), "\n", "")
+            if clean_k ~= "" then
+                set_header(clean_k, clean_v)
+            end
+        end
     end
 
     local function send_resp(status, content_type, body_content)

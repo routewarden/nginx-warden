@@ -222,4 +222,20 @@ do
     print("  ✓ mode proxy passed")
 end
 
+-- 14. CRLF Header Sanitization (Boundary Security Test)
+do
+    local h = response.new({
+        mode = "text",
+        status_code = 403,
+        headers = {
+            ["X-Injected\r\nHeader"] = "value\r\nSet-Cookie: evil=1"
+        }
+    })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.headers["X-InjectedHeader"] == "valueSet-Cookie: evil=1")
+    assert(captured.headers["X-Injected\r\nHeader"] == nil)
+    print("  ✓ CRLF header sanitization passed")
+end
+
 print("All response mode tests passed successfully!")
