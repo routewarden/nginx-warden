@@ -204,7 +204,11 @@ function _M.new(opts)
         if opts.check_query ~= nil then cfg.check_query = opts.check_query end
         if opts.debug ~= nil then cfg.debug = opts.debug end
         if opts.security_log ~= nil then cfg.security_log = opts.security_log end
-        if opts.status_code ~= nil then cfg.status_code = opts.status_code end
+        if opts.status_code ~= nil then
+            cfg.status_code = opts.status_code
+        elseif opts.status ~= nil then
+            cfg.status_code = opts.status
+        end
         if opts.custom_response_text ~= nil then cfg.custom_response_text = opts.custom_response_text end
 
         if opts.methods then cfg.methods = opts.methods end
@@ -225,6 +229,9 @@ function _M.new(opts)
             local resp_cfg = config.default_response_config()
             for k, v in pairs(opts.response) do
                 resp_cfg[k] = v
+            end
+            if resp_cfg.status ~= nil and resp_cfg.status_code == nil then
+                resp_cfg.status_code = resp_cfg.status
             end
             if resp_cfg.mode then
                 resp_cfg.mode = string.lower(resp_cfg.mode)
