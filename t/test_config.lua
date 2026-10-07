@@ -52,4 +52,16 @@ local rw_high_status = routewarden.new({
 local valid_high, val_err_high = rw_high_status:validate()
 assert(valid_high == false, "expected failure for status code >= 600")
 
+-- Block and allow patterns configuration verification
+local rw_patterns = routewarden.new({
+    block_patterns = { "(?i)^/admin/.*$", "(?i)\\.key$" },
+    allow_patterns = { "(?i)^/admin/health$", "(?i)^/public/.*$" }
+})
+local patterns_ok, patterns_err = rw_patterns:validate()
+assert(patterns_ok == true, "pattern configuration validation should succeed: " .. tostring(patterns_err))
+assert(#rw_patterns.config.block_patterns == 2, "should have 2 custom block_patterns")
+assert(#rw_patterns.config.allow_patterns == 2, "should have 2 custom allow_patterns")
+assert(#rw_patterns.compiled_block >= 2, "compiled block patterns should be present")
+assert(#rw_patterns.compiled_allow >= 2, "compiled allow patterns should be present")
+
 print("All config tests passed successfully!")
