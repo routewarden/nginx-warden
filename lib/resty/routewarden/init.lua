@@ -8,7 +8,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.4.0"
+    _VERSION = "1.4.1"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -60,6 +60,7 @@ local function compile_regex(pattern)
                 -- 1. Try direct Lua pattern matching first
                 local lua_pat = string.lower(pat)
                 lua_pat = string.gsub(lua_pat, "%(%?i%)", "")
+                lua_pat = string.gsub(lua_pat, "\\%.", "%%.")
                 local ok, res = pcall(function()
                     return string.find(lower_target, lua_pat)
                 end)
@@ -91,10 +92,10 @@ local function compile_regex(pattern)
                     end
                 end
 
-                -- 2. Sensitive extensions
-                local exts = { "txt", "log", "bak", "backup", "sql", "conf", "config", "ini", "yaml", "yml", "tar", "zip", "rar", "7z", "gz", "bz2", "iso", "dump", "sqlite", "sqlite3", "db" }
-                for _, ext in ipairs(exts) do
-                    if string.find(pat, ext, 1, true) then
+                -- 2. Sensitive archive / dump extensions (default pattern)
+                if (string.find(pat, "tar|zip", 1) or string.find(pat, "tar|tar%.gz", 1) or string.find(pat, "sqlite", 1)) and not (string.find(pat, "^%(%?i%)%^/") or string.find(pat, "^%^/")) then
+                    local exts = { "tar", "zip", "rar", "7z", "gz", "bz2", "iso", "dump", "sqlite", "sqlite3", "db" }
+                    for _, ext in ipairs(exts) do
                         if string.find(lower_target, "%." .. ext .. "$") or string.find(lower_target, "%." .. ext .. "[%?#]") then
                             return true
                         end

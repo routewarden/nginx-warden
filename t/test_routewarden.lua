@@ -378,6 +378,84 @@ do
     print("  ✓ Allowed request passes cleanly without block modifications")
 end
 
+-- 26. Comprehensive BlockPatterns and AllowPatterns verification matrix
+do
+    local rw = routewarden.new({
+        enabled = true,
+        enable_default_patterns = true,
+        enable_default_allow_patterns = true,
+        block_patterns = {
+            "(?i)^/admin/.*$",
+            "(?i)\\.(key|pem|conf|secret)$",
+            "(?i)^/internal/debug$"
+        },
+        allow_patterns = {
+            "(?i)^/admin/public/health$",
+            "(?i)^/admin/assets/.*$",
+            "(?i)^/public/sample\\.conf$",
+            "(?i)^/\\.well-known/acme-challenge/.*$"
+        },
+        allowed_ips = { "192.168.100.50" },
+        check_query = true
+    })
+
+    -- 1. BlockPatterns matches
+    local passed1 = simulate_request(rw, "GET", "/admin/dashboard")
+    assert(passed1 == false, "/admin/dashboard should be blocked by block_patterns")
+
+    local passed2 = simulate_request(rw, "GET", "/ADMIN/Settings")
+    assert(passed2 == false, "case insensitive /ADMIN/Settings should be blocked")
+
+    local passed3 = simulate_request(rw, "GET", "/certs/server.key")
+    assert(passed3 == false, "/certs/server.key should be blocked by extension pattern")
+
+    local passed4 = simulate_request(rw, "GET", "/config/app.conf")
+    assert(passed4 == false, "/config/app.conf should be blocked by extension pattern")
+
+    local passed5 = simulate_request(rw, "GET", "/internal/debug")
+    assert(passed5 == false, "/internal/debug should be blocked by exact endpoint pattern")
+
+    -- 2. AllowPatterns overriding BlockPatterns
+    local passed6 = simulate_request(rw, "GET", "/admin/public/health")
+    assert(passed6 == true, "/admin/public/health should be allowed via allow_patterns")
+
+    local passed7 = simulate_request(rw, "GET", "/admin/assets/app.js")
+    assert(passed7 == true, "/admin/assets/app.js should be allowed via allow_patterns")
+
+    local passed8 = simulate_request(rw, "GET", "/public/sample.conf")
+    assert(passed8 == true, "/public/sample.conf should be allowed despite .conf extension")
+
+    local passed9 = simulate_request(rw, "GET", "/.well-known/acme-challenge/abc-token")
+    assert(passed9 == true, "/.well-known/acme-challenge should be allowed via allow_patterns")
+
+    -- 3. Default block pattern still active
+    local passed10 = simulate_request(rw, "GET", "/.env")
+    assert(passed10 == false, "/.env should be blocked by default block pattern")
+
+    -- 4. Clean routes pass
+    local passed11 = simulate_request(rw, "GET", "/api/v1/products")
+    assert(passed11 == true, "/api/v1/products should pass")
+
+    local passed12 = simulate_request(rw, "GET", "/internal/debug/public")
+    assert(passed12 == true, "/internal/debug/public should pass (not matching exact ^/internal/debug$)")
+
+    -- 5. IP Whitelist bypass for blocked paths
+    local passed13 = simulate_request(rw, "GET", "/admin/dashboard", "/admin/dashboard", {}, "", "192.168.100.50")
+    assert(passed13 == true, "/admin/dashboard should pass from whitelisted IP")
+
+    local passed14 = simulate_request(rw, "GET", "/admin/dashboard", "/admin/dashboard", {}, "", "10.0.0.1")
+    assert(passed14 == false, "/admin/dashboard should be blocked from non-whitelisted IP")
+
+    -- 6. Query string inspection with custom block_patterns
+    local passed15 = simulate_request(rw, "GET", "/search?redirect=/admin/dashboard", "/search", {}, "redirect=/admin/dashboard")
+    assert(passed15 == false, "query parameter matching block_patterns should be blocked")
+
+    local passed16 = simulate_request(rw, "GET", "/search?q=normal-search-term", "/search", {}, "q=normal-search-term")
+    assert(passed16 == true, "clean query parameter should pass")
+
+    print("  ✓ Comprehensive BlockPatterns and AllowPatterns verification matrix passed")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

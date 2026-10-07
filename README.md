@@ -142,15 +142,15 @@ http {
 | `enabled` | `boolean` | `true` | Enable or disable RouteWarden inspection. |
 | `enable_default_patterns` | `boolean` | `true` | Enable built-in sensitive file rules (`.env`, `.git`, `.aws`, database dumps, actuator, debug endpoints). |
 | `enable_default_allow_patterns` | `boolean` | `true` | Enable exemptions for `/robots.txt`, `/sitemap*.xml`, `/.well-known/*`, etc. |
-| `path_patterns` / `block_patterns` | `table` | `{}` | Custom regex patterns to block. |
+| `block_patterns` | `table` | `{}` | Custom regex patterns to block. |
 | `allow_patterns` | `table` | `{}` | Custom regex patterns to allow (takes precedence over blocklists). |
 | `allowed_ips` | `table` | `{}` | Whitelist of client IPs or CIDR blocks (`192.168.1.0/24`, `::1`). |
 | `methods` | `table` | `{"GET"}` | HTTP methods to inspect (e.g. `{"GET", "POST"}`). |
 | `check_query` | `boolean` | `false` | When true, inspects raw and decoded query string values. |
 | `check_headers` | `boolean` | `false` | When true, inspects request headers against block patterns. |
-| `check_body` | `boolean` | `false` | When true, inspects request bodies against `body_patterns` (or `block_patterns`). |
+| `check_body` | `boolean` | `false` | When true, inspects request bodies against `check_body_patterns` (or `block_patterns`). |
 | `check_body_max_bytes` | `number` | `65536` | Maximum number of request body bytes to buffer and inspect. |
-| `body_patterns` | `table` | `{}` | Custom regex patterns to block when inspecting request bodies. |
+| `check_body_patterns` | `table` | `{}` | Custom regex patterns to block when inspecting request bodies. |
 | `security_log` | `boolean` | `false` | Emits structured JSON events compatible with CrowdSec parsers. |
 | `response` | `table` | `{ mode = "json", status_code = 403 }` | Response customization table. |
 
