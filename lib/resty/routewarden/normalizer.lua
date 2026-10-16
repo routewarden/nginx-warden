@@ -3,7 +3,7 @@
 -- matrix parameters (;), backslash separators (\), null bytes, and dot traversals.
 
 local _M = {
-    _VERSION = "1.4.1"
+    _VERSION = "1.5.0"
 }
 
 -- Strip query string from a raw URI if present
@@ -72,7 +72,8 @@ end
 function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     local paths_to_check = {}
 
-    local base_path = path_str or "/"
+    local base_path = strip_query(path_str or "/")
+    if base_path == "" then base_path = "/" end
     table.insert(paths_to_check, _M.clean_path(base_path))
 
     -- 1. Add RequestURI path before query to catch gateway discrepancies
@@ -84,9 +85,12 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
         end
     end
 
-    -- 2. Add RawPath if specified and different
-    if raw_path and raw_path ~= "" and raw_path ~= base_path then
-        table.insert(paths_to_check, _M.clean_path(raw_path))
+    -- 2. Add RawPath if specified and different (stripping query if leaked)
+    if raw_path and raw_path ~= "" then
+        local raw_path_clean = strip_query(raw_path)
+        if raw_path_clean ~= "" and raw_path_clean ~= base_path then
+            table.insert(paths_to_check, _M.clean_path(raw_path_clean))
+        end
     end
 
     -- 3. Perform iterative unescaping (up to 3 times) to prevent multi-layer URL encoding evasion (%252e%252e)
@@ -192,37 +196,44 @@ function _M.extract_query_candidates(raw_query)
         table.insert(candidates, unescaped)
     end
 
-    -- Parse query params (extracting both keys and values)
-    for pair in string.gmatch(raw_query, "[^&;]+") do
-        local eq_idx = string.find(pair, "=", 1, true)
-        local key = pair
-        local val = ""
-        if eq_idx then
-            key = string.sub(pair, 1, eq_idx - 1)
-            val = string.sub(pair, eq_idx + 1)
-        end
+    -- Parse query params (extracting both keys and values from raw and unescaped queries)
+    local queries_to_parse = { raw_query }
+    if unescaped ~= raw_query then
+        table.insert(queries_to_parse, unescaped)
+    end
 
-        if key ~= "" then
-            table.insert(candidates, key)
-            local unescaped_key = unescape_percent(key)
-            if unescaped_key ~= key then
-                table.insert(candidates, unescaped_key)
+    for _, q in ipairs(queries_to_parse) do
+        for pair in string.gmatch(q, "[^&;]+") do
+            local eq_idx = string.find(pair, "=", 1, true)
+            local key = pair
+            local val = ""
+            if eq_idx then
+                key = string.sub(pair, 1, eq_idx - 1)
+                val = string.sub(pair, eq_idx + 1)
             end
-            local key_cands = _M.extract_candidate_paths(key, key, key)
-            for _, kc in ipairs(key_cands) do
-                table.insert(candidates, kc)
-            end
-        end
 
-        if val ~= "" then
-            table.insert(candidates, val)
-            local unescaped_val = unescape_percent(val)
-            if unescaped_val ~= val then
-                table.insert(candidates, unescaped_val)
+            if key ~= "" then
+                table.insert(candidates, key)
+                local unescaped_key = unescape_percent(key)
+                if unescaped_key ~= key then
+                    table.insert(candidates, unescaped_key)
+                end
+                local key_cands = _M.extract_candidate_paths(key, key, key)
+                for _, kc in ipairs(key_cands) do
+                    table.insert(candidates, kc)
+                end
             end
-            local val_cands = _M.extract_candidate_paths(val, val, val)
-            for _, vc in ipairs(val_cands) do
-                table.insert(candidates, vc)
+
+            if val ~= "" then
+                table.insert(candidates, val)
+                local unescaped_val = unescape_percent(val)
+                if unescaped_val ~= val then
+                    table.insert(candidates, unescaped_val)
+                end
+                local val_cands = _M.extract_candidate_paths(val, val, val)
+                for _, vc in ipairs(val_cands) do
+                    table.insert(candidates, vc)
+                end
             end
         end
     end
