@@ -270,4 +270,120 @@ do
     print("  ✓ mode proxy unsafe schemes rejection passed")
 end
 
+-- 17. Nil config defaults (R-1)
+do
+    local h = response.new(nil)
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 403)
+    assert(captured.content_type == "application/json")
+    print("  ✓ nil response config defaults to 403 json")
+end
+
+-- 18. Case-insensitive mode parsing: SILENTDROP and HTML (R-2)
+do
+    local h_drop = response.new({ mode = "SILENTDROP" })
+    local ctx_drop, cap_drop = create_mock_ctx()
+    h_drop:serve(ctx_drop)
+    assert(cap_drop.silent_dropped == true)
+
+    local h_html = response.new({ mode = "HTML" })
+    local ctx_html, cap_html = create_mock_ctx()
+    h_html:serve(ctx_html)
+    assert(cap_html.content_type == "text/html; charset=utf-8")
+    print("  ✓ case-insensitive mode parsing verified")
+end
+
+-- 19. Custom status code override (e.g. 418 I'm a teapot) (R-3)
+do
+    local h = response.new({ mode = "text", status_code = 418, body = "I am a teapot" })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 418)
+    assert(captured.body == "I am a teapot")
+    print("  ✓ custom status code 418 override verified")
+end
+
+-- 20. FakeSuccess fallback for completely unknown path (R-4)
+do
+    local h = response.new({ mode = "fakeSuccess" })
+    local ctx, captured = create_mock_ctx("/some/unknown/resource")
+    h:serve(ctx)
+    assert(captured.status == 200)
+    assert(string.find(captured.body, "status") or string.find(captured.body, "ok") or string.find(captured.body, "success"))
+    print("  ✓ fakeSuccess unknown path fallback verified")
+end
+
+-- 21. RateLimitChallenge with retry_after_seconds = 0 defaults to 300 (R-5)
+do
+    local h = response.new({ mode = "rateLimitChallenge", retry_after_seconds = 0 })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 429)
+    assert(captured.headers["Retry-After"] == "300")
+    print("  ✓ rateLimitChallenge with 0 retry_after defaults to 300")
+end
+
+-- 22. GzipBomb with gzip_bomb_mb = 0 (R-6)
+do
+    local h = response.new({ mode = "gzipBomb", gzip_bomb_mb = 0 })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 403)
+    assert(captured.headers["Content-Encoding"] == "gzip")
+    print("  ✓ gzipBomb with 0 mb handled safely")
+end
+
+-- 23. Multiple custom headers map (R-7)
+do
+    local h = response.new({
+        mode = "json",
+        headers = {
+            ["X-Warden-Rule"] = "rule-100",
+            ["X-Warden-Action"] = "block",
+            ["X-Correlation-ID"] = "corr-abc-123"
+        }
+    })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.headers["X-Warden-Rule"] == "rule-100")
+    assert(captured.headers["X-Warden-Action"] == "block")
+    assert(captured.headers["X-Correlation-ID"] == "corr-abc-123")
+    print("  ✓ multiple custom headers map verified")
+end
+
+-- 24. Captcha with unknown provider fallback (R-8)
+do
+    local h = response.new({
+        mode = "captcha",
+        captcha = {
+            provider = "unknownProvider",
+            site_key = "abc123"
+        }
+    })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 403)
+    assert(captured.content_type == "text/html; charset=utf-8")
+    print("  ✓ captcha with unknown provider fallback verified")
+end
+
+-- 25. Nil req_ctx safety (R-9)
+do
+    local h = response.new({ mode = "json" })
+    local ok_nil, err_nil = pcall(function() h:serve(nil) end)
+    assert(ok_nil == true, "serve(nil) must not panic")
+    print("  ✓ nil req_ctx safety verified")
+end
+
+-- 26. Redirect with empty string defaults to / (R-10)
+do
+    local h = response.new({ mode = "redirect", redirect_url = "" })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.redirected_to == "/")
+    print("  ✓ redirect with empty string defaults to /")
+end
+
 print("All response mode tests passed successfully!")
+

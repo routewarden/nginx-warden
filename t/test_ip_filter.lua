@@ -81,6 +81,69 @@ assert(trusted_f:is_allowed(ip_filter.extract_client_ip(h_spoof, "203.0.113.99:1
 assert(ip_filter.extract_client_ip(h_spoof, "192.168.1.1:5432", trusted_f) == "10.0.0.50", "trusted proxy XFF must be honoured")
 assert(trusted_f:is_allowed(ip_filter.extract_client_ip(h_spoof, "192.168.1.1:5432", trusted_f)) == true, "forwarded IP from trusted proxy must be allowed")
 
+-- ─── Edge cases I-1 to I-10 ────────────────────────────────────────────────
+
+-- I-1: 0.0.0.0/0 match-all IPv4 CIDR
+local match_all_f, err_all = ip_filter.new({ "0.0.0.0/0" })
+assert(match_all_f ~= nil, "failed to parse 0.0.0.0/0: " .. tostring(err_all))
+assert(match_all_f:is_allowed("1.2.3.4") == true, "0.0.0.0/0 must match any IPv4")
+assert(match_all_f:is_allowed("198.51.100.254") == true, "0.0.0.0/0 must match 198.51.100.254")
+assert(match_all_f:is_allowed("2001:db8::1") == false, "0.0.0.0/0 must not match IPv6")
+
+-- I-2: /32 single host CIDR
+local single_host_f = ip_filter.new({ "192.168.5.10/32" })
+assert(single_host_f:is_allowed("192.168.5.10") == true)
+assert(single_host_f:is_allowed("192.168.5.11") == false)
+
+-- I-3: X-Forwarded-For with whitespace-padded IPs
+local h_ws = { ["x-forwarded-for"] = "   10.0.0.1   ,  192.168.1.1 " }
+assert(ip_filter.extract_client_ip(h_ws, "127.0.0.1") == "10.0.0.1")
+
+-- I-4: X-Forwarded-For with 10 IPs in chain
+local chain = "10.1.1.1, 10.2.2.2, 10.3.3.3, 10.4.4.4, 10.5.5.5, 10.6.6.6, 10.7.7.7, 10.8.8.8, 10.9.9.9, 10.10.10.10"
+local h_chain = { ["x-forwarded-for"] = chain }
+assert(ip_filter.extract_client_ip(h_chain, "127.0.0.1") == "10.1.1.1")
+
+-- I-5: X-Forwarded-For takes precedence, and X-Real-IP acts as fallback
+local h_prec = {
+    ["x-real-ip"] = "172.16.0.5",
+    ["x-forwarded-for"] = "192.168.0.1, 10.0.0.1"
+}
+assert(ip_filter.extract_client_ip(h_prec, "127.0.0.1") == "192.168.0.1")
+
+local h_real_only = {
+    ["x-real-ip"] = "172.16.0.5"
+}
+assert(ip_filter.extract_client_ip(h_real_only, "127.0.0.1") == "172.16.0.5")
+
+-- I-6: Empty or nil allowed_ips
+local empty_filter = ip_filter.new({})
+assert(empty_filter:is_allowed("127.0.0.1") == false)
+assert(empty_filter:is_allowed("::1") == false)
+
+local nil_filter = ip_filter.new(nil)
+assert(nil_filter:is_allowed("127.0.0.1") == false)
+
+-- I-7: Duplicate IPs in allowed_ips
+local dup_filter, dup_err = ip_filter.new({ "10.0.0.1", "10.0.0.1", "192.168.1.0/24", "192.168.1.0/24" })
+assert(dup_filter ~= nil and dup_err == nil)
+assert(dup_filter:is_allowed("10.0.0.1") == true)
+assert(dup_filter:is_allowed("192.168.1.5") == true)
+
+-- I-8: IPv6 zone ID stripped from remote address
+local h_zone = {}
+assert(ip_filter.extract_client_ip(h_zone, "[fe80::1%eth0]:8080") == "fe80::1")
+
+-- I-9: Trusted proxies with CIDR /0 trusts all proxies
+local trust_all = ip_filter.new({ "10.5.5.5" }, { "0.0.0.0/0" })
+local h_trust_all = { ["x-forwarded-for"] = "10.5.5.5" }
+assert(trust_all:is_allowed(ip_filter.extract_client_ip(h_trust_all, "203.0.113.199:5432", trust_all)) == true)
+
+-- I-10: is_allowed called with empty or nil IP
+assert(filter:is_allowed("") == false)
+assert(filter:is_allowed(nil) == false)
+assert(filter:is_allowed("not-an-ip") == false)
+
 print("All ip_filter tests passed successfully!")
 
 

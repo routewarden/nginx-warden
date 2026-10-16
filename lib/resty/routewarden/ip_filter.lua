@@ -3,7 +3,7 @@
 -- and trusted proxy validation.
 
 local _M = {
-    _VERSION = "1.4.1"
+    _VERSION = "1.5.0"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number
@@ -154,7 +154,7 @@ local function clean_ip(raw)
         end
     end
     ip = string.gsub(ip, "[%[%]]", "")
-    local pct = string.find(ip, "%%", 1, true)
+    local pct = string.find(ip, "%", 1, true)
     if pct then
         ip = string.sub(ip, 1, pct - 1)
     end
