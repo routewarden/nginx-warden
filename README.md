@@ -139,6 +139,7 @@ http {
 
 | Option | Type | Default | Description |
 |---|---|---|---|
+| `config_file` | `string` | `nil` | Path to a `routewarden.json` base configuration file. Inline Lua options override file values. |
 | `enabled` | `boolean` | `true` | Enable or disable RouteWarden inspection. |
 | `enable_default_patterns` | `boolean` | `true` | Enable built-in sensitive file rules (`.env`, `.git`, `.aws`, database dumps, actuator, debug endpoints). |
 | `enable_default_allow_patterns` | `boolean` | `true` | Enable exemptions for `/robots.txt`, `/sitemap*.xml`, `/.well-known/*`, etc. |

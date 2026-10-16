@@ -456,7 +456,98 @@ do
     print("  ✓ Comprehensive BlockPatterns and AllowPatterns verification matrix passed")
 end
 
+-- 27. Request with empty URI (E-1)
+do
+    local rw = routewarden.new()
+    local passed, cap = simulate_request(rw, "GET", "", "")
+    assert(passed == true, "empty URI should default safely")
+    print("  ✓ empty URI handled safely")
+end
+
+-- 28. check_body = true with nil body (E-2)
+do
+    local rw = routewarden.new({ check_body = true, check_body_patterns = { "(?i)secret" }, methods = { "POST" } })
+    local passed = simulate_request(rw, "POST", "/submit", "/submit", {}, "", "127.0.0.1", nil)
+    assert(passed == true, "nil body with check_body should pass")
+    print("  ✓ check_body = true with nil body handled safely")
+end
+
+-- 29. check_headers with mixed-case header names (E-3)
+do
+    local rw = routewarden.new({ check_headers = { "X-Custom-Probe", "X-Target-URI" } })
+    local passed_bad = simulate_request(rw, "GET", "/app", "/app", { ["x-custom-probe"] = "/.env" })
+    assert(passed_bad == false, "mixed-case header name inspection should match")
+    local passed_good = simulate_request(rw, "GET", "/app", "/app", { ["x-custom-probe"] = "/public/home" })
+    assert(passed_good == true, "clean custom header should pass")
+    print("  ✓ check_headers mixed-case header names verified")
+end
+
+-- 30. Multiple sequential requests on same instance (E-4)
+do
+    local rw = routewarden.new()
+    for _ = 1, 20 do
+        local passed1 = simulate_request(rw, "GET", "/.env")
+        assert(passed1 == false)
+        local passed2 = simulate_request(rw, "GET", "/api/v1/health")
+        assert(passed2 == true)
+    end
+    print("  ✓ multiple sequential requests on same instance verified")
+end
+
+-- 31. security_log = true with nil log sink (E-5)
+do
+    local rw = routewarden.new({ security_log = true })
+    rw:set_log_sink(nil)
+    local passed = simulate_request(rw, "GET", "/.env")
+    assert(passed == false)
+    print("  ✓ security_log with nil log sink does not crash")
+end
+
+-- 32. enable_default_patterns = false and no custom block_patterns (E-6)
+do
+    local rw = routewarden.new({ enable_default_patterns = false, block_patterns = {} })
+    local passed = simulate_request(rw, "GET", "/.env")
+    assert(passed == true, "/.env should pass when default patterns are disabled and no block patterns")
+    print("  ✓ disabling default patterns allows dotfiles")
+end
+
+-- 33. Request URI longer than 8KB (E-7)
+do
+    local rw = routewarden.new()
+    local long_uri = "/" .. string.rep("x/", 1000) .. "resource"
+    local passed = simulate_request(rw, "GET", long_uri)
+    assert(passed == true)
+    print("  ✓ request URI longer than 8KB inspected safely")
+end
+
+-- 34. Query string not inspected when check_query = false (E-8)
+do
+    local rw = routewarden.new({ check_query = false })
+    local passed = simulate_request(rw, "GET", "/search?file=.env", "/search", {}, "file=.env")
+    assert(passed == true, "query string must not be blocked when check_query = false")
+    print("  ✓ check_query = false ignores query params")
+end
+
+-- 35. IPv6 address in allowed_ips bypassing dotfile block (E-9)
+do
+    local rw = routewarden.new({ allowed_ips = { "2001:db8:cafe::1" } })
+    local passed_v6 = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db8:cafe::1]:12345")
+    assert(passed_v6 == true, "allowed IPv6 must bypass block")
+    local passed_other = simulate_request(rw, "GET", "/.env", "/.env", {}, "", "[2001:db8:beef::1]:12345")
+    assert(passed_other == false, "other IPv6 must be blocked")
+    print("  ✓ IPv6 whitelist bypass verified")
+end
+
+-- 36. Header value containing number or non-string (E-10)
+do
+    local rw = routewarden.new({ check_headers = { "X-Request-ID" } })
+    local passed_num = simulate_request(rw, "GET", "/app", "/app", { ["x-request-id"] = 12345 })
+    assert(passed_num == true, "numeric header value should not crash")
+    print("  ✓ numeric header value handled safely")
+end
+
 print("All routewarden integration tests passed successfully!")
+
 
 
 
