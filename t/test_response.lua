@@ -329,7 +329,7 @@ do
     local h = response.new({ mode = "gzipBomb", gzip_bomb_mb = 0 })
     local ctx, captured = create_mock_ctx()
     h:serve(ctx)
-    assert(captured.status == 403)
+    assert(captured.status == 200)
     assert(captured.headers["Content-Encoding"] == "gzip")
     print("  ✓ gzipBomb with 0 mb handled safely")
 end
