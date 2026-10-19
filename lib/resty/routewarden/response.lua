@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.5.0"
+    _VERSION = "1.5.1"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -134,9 +134,19 @@ end
 -- Constructor
 function _M.new(response_config)
     local cfg = response_config or {}
+    local mode = string.lower(cfg.mode or "json")
+    local default_code = 403
+    if mode == "gzipbomb" or mode == "bomb" or mode == "fakesuccess" or mode == "decoy" then
+        default_code = 200
+    elseif mode == "ratelimit" or mode == "ratelimitchallenge" or mode == "backoff" then
+        default_code = 429
+    elseif mode == "redirect" then
+        default_code = 302
+    end
+
     local self = {
-        mode = string.lower(cfg.mode or "json"),
-        status_code = cfg.status_code or 403,
+        mode = mode,
+        status_code = cfg.status_code or default_code,
         body = cfg.body or "",
         content_type = cfg.content_type,
         headers = cfg.headers or {},
