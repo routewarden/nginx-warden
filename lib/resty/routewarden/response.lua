@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.5.1"
+    _VERSION = "1.6.0"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -289,7 +289,7 @@ function _M:serve(req_ctx)
         local null_chunk = string.rep("\0", block_len)
         local deflate_chunk = "\0\0\x80\xff\x7f" .. null_chunk
         local total_chunks = math.floor((target_mb * 1024 * 1024) / block_len)
-        if total_chunks <= 0 then total_chunks = 32 end
+        if total_chunks <= 0 then total_chunks = 1 end
         local final_deflate_block = "\x01\x00\x00\xff\xff"
         local trailer = "\x00\x00\x00\x00\x00\x00\x00\x00"
 

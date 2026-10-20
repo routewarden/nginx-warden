@@ -385,5 +385,16 @@ do
     print("  ✓ redirect with empty string defaults to /")
 end
 
+-- 27. GzipBomb with fractional float gzip_bomb_mb = 0.5
+do
+    local h = response.new({ mode = "gzipBomb", gzip_bomb_mb = 0.5 })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 200)
+    assert(captured.headers["Content-Encoding"] == "gzip")
+    assert(captured.body ~= nil and #captured.body > 0)
+    print("  ✓ gzipBomb with fractional 0.5 mb handled safely")
+end
+
 print("All response mode tests passed successfully!")
 
