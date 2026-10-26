@@ -196,3 +196,7 @@ Run the standalone unit test suite:
 ## License
 
 MIT License. Copyright (c) 2026 Aman.
+
+## ASN allowlisting
+
+See [ASN allowlisting](ASN_ALLOWLIST.md) for configuration, routing snapshot generation, and security behavior.

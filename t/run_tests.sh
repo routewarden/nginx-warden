@@ -20,6 +20,10 @@ echo "▶ Running IP & CIDR Filter Tests..."
 "$LUA_BIN" t/test_ip_filter.lua
 echo ""
 
+echo "▶ Running ASN Filter Tests..."
+"$LUA_BIN" t/test_asn.lua
+echo ""
+
 echo "▶ Running Configuration & Validation Tests..."
 "$LUA_BIN" t/test_config.lua
 echo ""
