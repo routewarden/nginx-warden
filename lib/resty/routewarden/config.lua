@@ -72,6 +72,8 @@ function _M.default_config()
         block_patterns = {},
         allow_patterns = {},
         allowed_ips = {},
+        allowed_asns = {},
+        asn_db = nil,
         trusted_proxies = {},
         methods = { "GET" },
         check_query = false,

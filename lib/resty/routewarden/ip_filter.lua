@@ -142,7 +142,7 @@ local function clean_ip(raw)
         else
             ip = string.gsub(ip, "[%[%]]", "")
         end
-    elseif string.find(ip, "%.") then
+    elseif string.match(ip, "^%d+%.%d+%.%d+%.%d+:%d+$") then
         local colon = string.find(ip, ":", 1, true)
         if colon then
             ip = string.sub(ip, 1, colon - 1)
@@ -384,6 +384,61 @@ function _M.extract_client_ip(headers, remote_addr, trusted_matcher)
     end
 
     return ""
+end
+
+-- Shared byte representation for ASN prefix tries. IPv4-mapped addresses use
+-- their native IPv4 representation, consistently with the Go implementations.
+function _M.address_bytes(address)
+    if type(address) ~= 'string' then return nil end
+    local ip = address:match('^%s*(.-)%s*$')
+    if ip:sub(1, 1) == '[' then
+        ip = ip:match('^%[([^%]]+)%]:%d+$') or ip:match('^%[([^%]]+)%]$')
+        if not ip then return nil end
+    else
+        ip = ip:match('^(%d+%.%d+%.%d+%.%d+):%d+$') or ip
+    end
+    local dotted = ip:match('(%d+%.%d+%.%d+%.%d+)$')
+    if dotted then
+        for octet in dotted:gmatch('%d+') do
+            if #octet > 1 and octet:sub(1, 1) == '0' then return nil end
+        end
+    end
+    -- Validate IPv6 here rather than inheriting the permissive legacy parser.
+    -- Malformed forwarded addresses must never resolve to an allowed origin.
+    if ip:find(':', 1, true) then
+        local v4 = ip:match(':(%d+%.%d+%.%d+%.%d+)$')
+        if v4 then
+            local num = ipv4_to_num(v4)
+            if not num then return nil end
+            ip = ip:sub(1, #ip - #v4) .. string.format('%x:%x', math.floor(num / 65536), num % 65536)
+        end
+        if ip:find('[^%x:]') or ip:find(':::', 1, true) then return nil end
+        if ip:sub(1, 1) == ':' and ip:sub(1, 2) ~= '::' then return nil end
+        if ip:sub(-1) == ':' and ip:sub(-2) ~= '::' then return nil end
+        local compression = ip:find('::', 1, true)
+        if compression and ip:find('::', compression + 2, true) then return nil end
+        local count = 0
+        for group in ip:gmatch('[^:]+') do
+            if #group > 4 then return nil end
+            count = count + 1
+        end
+        if compression then
+            if count >= 8 then return nil end
+        elseif count ~= 8 or ip:sub(1, 1) == ':' or ip:sub(-1) == ':' then
+            return nil
+        end
+    end
+    if ip:find(':', 1, true) then
+        local bytes = ipv6_to_bytes(ip)
+        if not bytes then return nil end
+        local mapped = bytes[11] == 255 and bytes[12] == 255
+        for i = 1, 10 do if bytes[i] ~= 0 then mapped = false end end
+        if mapped then return { bytes[13], bytes[14], bytes[15], bytes[16] } end
+        return bytes
+    end
+    local num = ipv4_to_num(ip)
+    if not num then return nil end
+    return { math.floor(num / 16777216) % 256, math.floor(num / 65536) % 256, math.floor(num / 256) % 256, num % 256 }
 end
 
 return _M

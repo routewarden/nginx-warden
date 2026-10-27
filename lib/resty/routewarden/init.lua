@@ -4,6 +4,7 @@
 local config = require("resty.routewarden.config")
 local normalizer = require("resty.routewarden.normalizer")
 local ip_filter = require("resty.routewarden.ip_filter")
+local asn_filter = require("resty.routewarden.asn_filter")
 local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
@@ -446,6 +447,8 @@ local function normalize_json_config(raw)
     if raw.allow_patterns ~= nil then t.allow_patterns = raw.allow_patterns
     elseif raw.allowPatterns ~= nil then t.allow_patterns = raw.allowPatterns end
 
+    t.allowed_asns = raw.allowed_asns or raw.allowedASNs
+    t.asn_db = raw.asn_db or raw.asnDB
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -593,6 +596,8 @@ function _M.new(opts)
         if ap == nil then ap = source.allowPatterns end
         if ap then cfg.allow_patterns = ap end
 
+        if source.allowed_asns or source.allowedASNs then cfg.allowed_asns = source.allowed_asns or source.allowedASNs end
+        if source.asn_db or source.asnDB then cfg.asn_db = source.asn_db or source.asnDB end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -727,6 +732,8 @@ function _M.new(opts)
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
 
+    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json)
+    if not asn_matcher then return nil, asn_err end
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
         ip_matcher, err = ip_filter.new(all_allowed_ips, all_trusted_proxies)
@@ -745,6 +752,7 @@ function _M.new(opts)
         compiled_allow = compiled_allow,
         compiled_body = compiled_body,
         ip_matcher = ip_matcher,
+        asn_matcher = asn_matcher,
         response_handler = resp_handler,
         custom_log_sink = nil
     }
@@ -824,6 +832,10 @@ function _M:inspect(req_ctx)
             return true
         end
     end
+
+    local asn_ip = remote_addr
+    if self.ip_matcher and self.ip_matcher.has_trusted_proxies then asn_ip = client_ip end
+    if self.asn_matcher:is_allowed(asn_ip) then return true end
 
     -- Stage 2: Path Normalization
     local raw_uri = req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""
