@@ -3,7 +3,7 @@
 -- and trusted proxy validation.
 
 local _M = {
-    _VERSION = "1.6.0"
+    _VERSION = "1.7.0"
 }
 
 -- Convert an IPv4 dotted quad string to a 32-bit unsigned number

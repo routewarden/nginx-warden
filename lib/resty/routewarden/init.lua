@@ -9,7 +9,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.6.0"
+    _VERSION = "1.7.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
