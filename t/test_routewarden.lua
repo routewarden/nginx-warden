@@ -546,6 +546,191 @@ do
     print("  ✓ numeric header value handled safely")
 end
 
+-- 37. URI fragment anchor bypass prevented
+do
+    local rw = routewarden.new({ enable_default_patterns = true })
+    local test_paths = {
+        "/server-status#admin",
+        "/server-status#section",
+        "/server.key#frag",
+        "/.env#local",
+        "/phpinfo.php#info",
+    }
+    for _, p in ipairs(test_paths) do
+        local passed = simulate_request(rw, "GET", p, p)
+        assert(passed == false, "path with fragment " .. p .. " must be blocked")
+    end
+    print("  ✓ URI fragment anchor bypass prevented")
+end
+
+-- 38. Wildcard methods (* and ALL) inspect requests
+do
+    local rw_star = routewarden.new({ methods = { "*" } })
+    assert(simulate_request(rw_star, "POST", "/.env", "/.env") == false, "wildcard * must inspect POST")
+    assert(simulate_request(rw_star, "DELETE", "/.env", "/.env") == false, "wildcard * must inspect DELETE")
+
+    local rw_all = routewarden.new({ methods = { "ALL" } })
+    assert(simulate_request(rw_all, "POST", "/.env", "/.env") == false, "wildcard ALL must inspect POST")
+    assert(simulate_request(rw_all, "PUT", "/.env", "/.env") == false, "wildcard ALL must inspect PUT")
+    print("  ✓ wildcard methods (* and ALL) verified")
+end
+
+-- 39. Matrix parameter allowlist bypass prevented
+do
+    local rw = routewarden.new({
+        enable_default_patterns = true,
+        enable_default_allow_patterns = true,
+    })
+    local attack_paths = {
+        "/.env;robots.txt",
+        "/.env;sitemap.xml",
+        "/backup.sql;robots.txt",
+        "/.git/config;robots.txt",
+    }
+    for _, p in ipairs(attack_paths) do
+        local passed = simulate_request(rw, "GET", p, p)
+        assert(passed == false, "matrix attack path " .. p .. " must be blocked")
+    end
+    print("  ✓ matrix parameter allowlist bypass prevented")
+end
+
+-- 40. check_body auto-expands methods to inspect POST when methods is omitted
+do
+    local rw = routewarden.new({
+        enable_default_patterns = false,
+        check_body = true,
+        check_body_patterns = { "(?i)password_leak" },
+    })
+    local passed, block_info = rw:inspect({
+        method = "POST",
+        uri = "/api/login",
+        raw_uri = "/api/login",
+        body = "user=admin&token=password_leak_123",
+    })
+    assert(passed == false, "POST body must be inspected when methods is omitted")
+    print("  ✓ check_body auto-methods expansion verified")
+end
+
+-- 41. check_headers handles table headers and comma-delimited headers without crashing
+do
+    local rw = routewarden.new({
+        check_headers = { "X-Rewrite-URL", "X-Custom-Path" },
+        enable_default_patterns = true,
+    })
+    -- Table of headers (as returned by OpenResty for duplicate headers)
+    local passed_tbl, block_info = rw:inspect({
+        method = "GET",
+        uri = "/index.html",
+        raw_uri = "/index.html",
+        headers = {
+            ["x-rewrite-url"] = { "/safe/path", "/.env" },
+        },
+    })
+    assert(passed_tbl == false, "duplicate header with sensitive path must be blocked")
+    assert(block_info.reason == "header_blocked")
+
+    -- Comma-delimited header
+    local passed_comma, block_info2 = rw:inspect({
+        method = "GET",
+        uri = "/index.html",
+        raw_uri = "/index.html",
+        headers = {
+            ["x-custom-path"] = "/safe/path, /.env",
+        },
+    })
+    assert(passed_comma == false, "comma-delimited header with sensitive path must be blocked")
+    print("  ✓ multi-value and table headers handled safely in check_headers")
+end
+
+-- 42. address_bytes strips IPv6 zone identifiers safely
+do
+    local ip_filter = require("resty.routewarden.ip_filter")
+    local bytes = ip_filter.address_bytes("fe80::1%eth0")
+    assert(bytes ~= nil and #bytes == 16, "address_bytes must parse scoped IPv6 address")
+    local bytes_bracketed = ip_filter.address_bytes("[fe80::1%eth0]:443")
+    assert(bytes_bracketed ~= nil and #bytes_bracketed == 16, "address_bytes must parse scoped bracketed IPv6 address")
+    print("  ✓ IPv6 zone identifiers handled safely in address_bytes")
+end
+
+-- 43. captcha rendering handles percent characters and HTML special chars without crashing
+do
+    local response = require("resty.routewarden.response")
+    local rh = response.new({
+        mode = "captcha",
+        captcha = {
+            provider = "turnstile",
+            site_key = '0x4AAAAAA"onmouseover="alert(1)',
+            title = "100% Security <Check> & Verification",
+        },
+    })
+    local captured_status, captured_ct, captured_body
+    rh:serve({
+        respond = function(status, ct, body)
+            captured_status = status
+            captured_ct = ct
+            captured_body = body
+        end
+    })
+    assert(captured_status == 403, "captcha must respond with status 403")
+    assert(string.find(captured_body, "100% Security &lt;Check&gt; &amp; Verification", 1, true) ~= nil, "title must be HTML-escaped and percent signs preserved")
+    assert(string.find(captured_body, "&quot;onmouseover=&quot;", 1, true) ~= nil, "site_key quotes must be attribute-escaped")
+    print("  ✓ captcha rendering with percent signs and HTML injection characters verified")
+end
+
+-- 44. bracketed IPv6 CIDR and exact IP in allowed_ips
+do
+    local routewarden = require("resty.routewarden")
+    local rw, err = routewarden.new({
+        allowed_ips = { "[2001:db8::]/32", "[2001:db9::cafe]" }
+    })
+    assert(rw ~= nil, "routewarden.new must succeed with bracketed IPv6 CIDRs: " .. tostring(err))
+
+    -- Allowed via bracketed CIDR
+    local allowed_cidr = rw:inspect({
+        method = "GET",
+        uri = "/.env",
+        raw_uri = "/.env",
+        remote_addr = "2001:db8::1"
+    })
+    assert(allowed_cidr == true, "client IP in bracketed IPv6 CIDR must be allowed")
+
+    -- Allowed via bracketed exact IP
+    local allowed_exact = rw:inspect({
+        method = "GET",
+        uri = "/.env",
+        raw_uri = "/.env",
+        remote_addr = "2001:db9::cafe"
+    })
+    assert(allowed_exact == true, "client IP matching bracketed exact IPv6 must be allowed")
+
+    -- Unallowed IP
+    local denied = rw:inspect({
+        method = "GET",
+        uri = "/.env",
+        raw_uri = "/.env",
+        remote_addr = "2001:dba::1"
+    })
+    assert(denied == false, "client IP outside allowed_ips must be blocked")
+    print("  ✓ bracketed IPv6 CIDR and exact IP supported in allowed_ips")
+end
+
+-- 45. check_query inspection on sensitive parameter keys
+do
+    local routewarden = require("resty.routewarden")
+    local rw = routewarden.new({
+        check_query = true
+    })
+    local passed, block_info = rw:inspect({
+        method = "GET",
+        uri = "/search",
+        raw_uri = "/search?.env=1",
+        query_string = ".env=1"
+    })
+    assert(passed == false, "query string with sensitive key .env must be blocked")
+    assert(block_info.reason == "query_blocked", "reason must be query_blocked")
+    print("  ✓ sensitive query parameter keys blocked when check_query enabled")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

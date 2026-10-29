@@ -6,10 +6,17 @@ local _M = {
     _VERSION = "1.7.0"
 }
 
--- Strip query string from a raw URI if present
+-- Strip query string and fragment from a raw URI if present
 local function strip_query(str)
     if not str then return "" end
-    local idx = string.find(str, "?", 1, true)
+    local q_idx = string.find(str, "?", 1, true)
+    local h_idx = string.find(str, "#", 1, true)
+    local idx
+    if q_idx and h_idx then
+        idx = math.min(q_idx, h_idx)
+    else
+        idx = q_idx or h_idx
+    end
     if idx then
         return string.sub(str, 1, idx - 1)
     end
@@ -131,16 +138,11 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
             end
 
             local cleaned_segments = {}
-            local param_segments = {}
 
             for _, seg in ipairs(parts) do
                 local semi_idx = string.find(seg, ";", 1, true)
                 if semi_idx then
                     table.insert(cleaned_segments, string.sub(seg, 1, semi_idx - 1))
-                    local param = string.sub(seg, semi_idx + 1)
-                    if param ~= "" then
-                        table.insert(param_segments, param)
-                    end
                 else
                     table.insert(cleaned_segments, seg)
                 end
@@ -148,13 +150,6 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
 
             local matrix_stripped = "/" .. table.concat(cleaned_segments, "/")
             table.insert(paths_to_check, _M.clean_path(matrix_stripped))
-
-            for _, param in ipairs(param_segments) do
-                if param ~= "" then
-                    table.insert(paths_to_check, "/" .. param)
-                    table.insert(paths_to_check, _M.clean_path("/" .. param))
-                end
-            end
 
             local semi_as_slash = string.gsub(p, ";", "/")
             table.insert(paths_to_check, _M.clean_path(semi_as_slash))
@@ -171,7 +166,18 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
         end
     end
 
-    -- 7. Deduplicate candidates and maintain order
+    -- 7. Strip embedded URI fragments (#) to prevent regex anchor evasion
+    count = #paths_to_check
+    for i = 1, count do
+        local p = paths_to_check[i]
+        local hash_idx = string.find(p, "#", 1, true)
+        if hash_idx then
+            local before = string.sub(p, 1, hash_idx - 1)
+            table.insert(paths_to_check, _M.clean_path(before))
+        end
+    end
+
+    -- 8. Deduplicate candidates and maintain order
     local candidate_paths = {}
     local seen = {}
     for _, p in ipairs(paths_to_check) do

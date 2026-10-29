@@ -1,6 +1,7 @@
 package.path = 'lib/?.lua;lib/?/init.lua;' .. package.path
 local rw = require('resty.routewarden')
-local path = os.tmpname()
+local ok, tmp = pcall(os.tmpname)
+local path = (ok and tmp) or ("t/test_asn_" .. os.time() .. ".tmp")
 local function write(content)
     local f = assert(io.open(path, 'w')); f:write(content); f:close()
 end
