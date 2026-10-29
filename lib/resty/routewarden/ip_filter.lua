@@ -172,6 +172,7 @@ local function parse_ip_entries(entries, ipv4_exact, ipv4_nets, ipv6_exact, ipv6
         if pct then
             trimmed = string.sub(trimmed, 1, pct - 1)
         end
+        trimmed = string.gsub(trimmed, "[%[%]]", "")
         if trimmed ~= "" then
             local slash_idx = string.find(trimmed, "/", 1, true)
             if slash_idx then
@@ -396,6 +397,10 @@ function _M.address_bytes(address)
         if not ip then return nil end
     else
         ip = ip:match('^(%d+%.%d+%.%d+%.%d+):%d+$') or ip
+    end
+    local pct = ip:find('%', 1, true)
+    if pct then
+        ip = ip:sub(1, pct - 1)
     end
     local dotted = ip:match('(%d+%.%d+%.%d+%.%d+)$')
     if dotted then
