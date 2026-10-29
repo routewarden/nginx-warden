@@ -4,7 +4,7 @@
 -- fakeSuccess, rateLimitChallenge, proxy, infiniteStream, xml
 
 local _M = {
-    _VERSION = "1.6.0"
+    _VERSION = "1.7.0"
 }
 
 -- Default Captcha HTML template matching caddy-warden & traefik-warden exactly
@@ -95,6 +95,16 @@ local DEFAULT_CAPTCHA_HTML = [[<!DOCTYPE html>
 </body>
 </html>]]
 
+local function escape_html(str)
+    if not str then return "" end
+    str = string.gsub(str, "&", "&amp;")
+    str = string.gsub(str, "<", "&lt;")
+    str = string.gsub(str, ">", "&gt;")
+    str = string.gsub(str, '"', "&quot;")
+    str = string.gsub(str, "'", "&#39;")
+    return str
+end
+
 -- Simple template renderer
 local function render_captcha_html(template_str, provider, site_key, title)
     local tmpl = template_str or DEFAULT_CAPTCHA_HTML
@@ -102,25 +112,28 @@ local function render_captcha_html(template_str, provider, site_key, title)
     site_key = site_key or ""
     title = title or "Security Check Required"
 
+    local safe_title = escape_html(title)
+    local safe_site_key = escape_html(site_key)
+
     local script = ""
     local widget = ""
 
     if provider == "turnstile" then
         script = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
-        widget = '<div class="cf-turnstile" data-sitekey="' .. site_key .. '" data-theme="dark"></div>'
+        widget = '<div class="cf-turnstile" data-sitekey="' .. safe_site_key .. '" data-theme="dark"></div>'
     elseif provider == "hcaptcha" then
         script = '<script src="https://js.hcaptcha.com/1/api.js" async defer></script>'
-        widget = '<div class="h-captcha" data-sitekey="' .. site_key .. '" data-theme="dark"></div>'
+        widget = '<div class="h-captcha" data-sitekey="' .. safe_site_key .. '" data-theme="dark"></div>'
     elseif provider == "recaptcha" then
         script = '<script src="https://www.google.com/recaptcha/api.js" async defer></script>'
-        widget = '<div class="g-recaptcha" data-sitekey="' .. site_key .. '" data-theme="dark"></div>'
+        widget = '<div class="g-recaptcha" data-sitekey="' .. safe_site_key .. '" data-theme="dark"></div>'
     else
-        widget = '<div class="custom-captcha">' .. site_key .. '</div>'
+        widget = '<div class="custom-captcha">' .. safe_site_key .. '</div>'
     end
 
-    local rendered = string.gsub(tmpl, "{{TITLE}}", title)
-    rendered = string.gsub(rendered, "{{SCRIPT}}", script)
-    rendered = string.gsub(rendered, "{{WIDGET}}", widget)
+    local rendered = string.gsub(tmpl, "{{TITLE}}", function() return safe_title end)
+    rendered = string.gsub(rendered, "{{SCRIPT}}", function() return script end)
+    rendered = string.gsub(rendered, "{{WIDGET}}", function() return widget end)
     return rendered
 end
 
@@ -291,7 +304,8 @@ function _M:serve(req_ctx)
         local total_chunks = math.floor((target_mb * 1024 * 1024) / block_len)
         if total_chunks <= 0 then total_chunks = 1 end
         local final_deflate_block = "\x01\x00\x00\xff\xff"
-        local trailer = "\x00\x00\x00\x00\x00\x00\x00\x00"
+        -- Valid CRC32 (0x011ffca6) + ISIZE (32768) in Little Endian for 32KB zero payload
+        local trailer = "\xa6\xfc\x1f\x01\x00\x80\x00\x00"
 
         if req_ctx and req_ctx.respond then
             req_ctx.respond(self.status_code, ct, generate_gzip_bomb_header() .. deflate_chunk .. final_deflate_block .. trailer)
@@ -305,7 +319,8 @@ function _M:serve(req_ctx)
             for _ = 1, total_chunks do
                 local ok, err = ngx.print(deflate_chunk)
                 if not ok then break end
-                ngx.flush(true)
+                local ok_flush = ngx.flush(true)
+                if not ok_flush then break end
             end
             ngx.print(final_deflate_block .. trailer)
             return ngx.exit(self.status_code)
@@ -326,11 +341,20 @@ function _M:serve(req_ctx)
 
         if ngx then
             ngx.status = self.status_code
+            local aborted = false
+            if ngx.on_abort then
+                ngx.on_abort(function()
+                    aborted = true
+                end)
+            end
             local iterations = math.floor(max_sec / delay_sec)
             for _ = 1, iterations do
+                if aborted then break end
                 local ok, _ = ngx.print(" ")
                 if not ok then break end
-                ngx.flush(true)
+                local ok_flush = ngx.flush(true)
+                if not ok_flush then break end
+                if aborted then break end
                 ngx.sleep(delay_sec)
             end
             return ngx.exit(self.status_code)
@@ -338,7 +362,9 @@ function _M:serve(req_ctx)
         return
 
     elseif mode == "fakesuccess" or mode == "decoy" then
-        local req_path = string.lower((req_ctx and (req_ctx.uri or req_ctx.path) or (ngx and ngx.var and ngx.var.uri) or "") .. " " .. (req_ctx and req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""))
+        local uri_part = (req_ctx and (req_ctx.uri or req_ctx.path) or (ngx and ngx.var and ngx.var.uri) or "")
+        local clean_path = string.lower(uri_part)
+        local req_path = string.lower(uri_part .. " " .. (req_ctx and req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""))
         local ct = "text/plain; charset=utf-8"
         local body = self.body
 
@@ -349,7 +375,7 @@ function _M:serve(req_ctx)
             elseif string.find(req_path, "actuator", 1, true) then
                 ct = "application/json"
                 body = '{"status":"UP","components":{"diskSpace":{"status":"UP","details":{"total":10737418240,"free":8589934592,"threshold":10485760}},"ping":{"status":"UP"}}}'
-            elseif string.find(req_path, ".git/head", 1, true) or string.find(req_path, ".git", 1, true) then
+            elseif string.find(req_path, ".git/head", 1, true) or string.find(req_path, ".git/", 1, true) or clean_path == "/.git" or string.match(clean_path, "/%.git$") then
                 ct = "text/plain; charset=utf-8"
                 body = "ref: refs/heads/master\n"
             elseif string.find(req_path, "phpinfo", 1, true) or string.find(req_path, "info.php", 1, true) then
@@ -446,7 +472,8 @@ function _M:serve(req_ctx)
             for _ = 1, total_chunks do
                 local ok = ngx.print(chunk)
                 if not ok then break end
-                ngx.flush(true)
+                local ok_flush = ngx.flush(true)
+                if not ok_flush then break end
             end
             return ngx.exit(self.status_code)
         end

@@ -4,11 +4,12 @@
 local config = require("resty.routewarden.config")
 local normalizer = require("resty.routewarden.normalizer")
 local ip_filter = require("resty.routewarden.ip_filter")
+local asn_filter = require("resty.routewarden.asn_filter")
 local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.6.0"
+    _VERSION = "1.7.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -79,8 +80,10 @@ local function compile_regex(pattern)
                     return true
                 end
 
+                local pat_no_slash = string.gsub(pat, "\\", "")
+
                 -- Match default patterns by pattern equality:
-                if string.find(pat, "(\\.env.*|", 1, true) then
+                if string.find(pat, "(\\.env.*|", 1, true) or string.find(pat_no_slash, "(.env.*|", 1, true) then
                     if string.find(lower_target, "%.env") then
                         return true
                     end
@@ -116,7 +119,7 @@ local function compile_regex(pattern)
                 -- 4. Admin endpoints
                 local admin = { "phpinfo%.php", "info%.php", "server%-status", "server%-info", "actuator", "metrics", "heapdump", "trace" }
                 for _, a in ipairs(admin) do
-                    if string.find(pat, a, 1) then
+                    if string.find(pat_no_slash, a) then
                         if string.find(lower_target, a) then
                             return true
                         end
@@ -126,7 +129,7 @@ local function compile_regex(pattern)
                 -- 5. Package managers
                 local pkgs = { "composer%.json", "composer%.lock", "package%-lock%.json", "yarn%.lock", "pnpm%-lock%.yaml", "pipfile", "requirements%.txt" }
                 for _, pkg in ipairs(pkgs) do
-                    if string.find(pat, pkg, 1) then
+                    if string.find(pat_no_slash, pkg) then
                         if string.find(lower_target, pkg) then
                             return true
                         end
@@ -158,7 +161,7 @@ local function compile_regex(pattern)
                 end
 
                 -- 9. CMS & framework configs
-                if string.find(pat, "wp%-config", 1) or string.find(pat, "wp-config", 1, true) then
+                if string.find(pat_no_slash, "wp%-config", 1) or string.find(pat, "wp-config", 1, true) then
                     if string.find(lower_target, "wp%-config%.php") or string.find(lower_target, "configuration%.php") or
                        string.find(lower_target, "settings%.py") then
                         return true
@@ -166,19 +169,19 @@ local function compile_regex(pattern)
                 end
 
                 -- 10. Default allow patterns
-                if string.find(pat, "robots%.txt", 1) and (lower_target == "/robots.txt" or lower_target == "robots.txt") then
+                if string.find(pat_no_slash, "robots%.txt", 1) and (lower_target == "/robots.txt" or lower_target == "robots.txt") then
                     return true
                 end
-                if string.find(pat, "sitemap", 1) and string.find(lower_target, "^/sitemap.*%.xml$") then
+                if string.find(pat_no_slash, "sitemap", 1) and string.find(lower_target, "^/sitemap.*%.xml$") then
                     return true
                 end
-                if string.find(pat, "ads%.txt", 1) and (lower_target == "/ads.txt" or lower_target == "ads.txt") then
+                if string.find(pat_no_slash, "ads%.txt", 1) and (lower_target == "/ads.txt" or lower_target == "ads.txt") then
                     return true
                 end
-                if string.find(pat, "security%.txt", 1) and (lower_target == "/security.txt" or lower_target == "security.txt") then
+                if string.find(pat_no_slash, "security%.txt", 1) and (lower_target == "/security.txt" or lower_target == "security.txt") then
                     return true
                 end
-                if string.find(pat, "well%-known", 1) and string.find(lower_target, "^/%.well%-known") then
+                if string.find(pat_no_slash, "well%-known", 1) and string.find(lower_target, "^/%.well%-known") then
                     return true
                 end
 
@@ -446,6 +449,8 @@ local function normalize_json_config(raw)
     if raw.allow_patterns ~= nil then t.allow_patterns = raw.allow_patterns
     elseif raw.allowPatterns ~= nil then t.allow_patterns = raw.allowPatterns end
 
+    t.allowed_asns = raw.allowed_asns or raw.allowedASNs
+    t.asn_db = raw.asn_db or raw.asnDB
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -593,6 +598,8 @@ function _M.new(opts)
         if ap == nil then ap = source.allowPatterns end
         if ap then cfg.allow_patterns = ap end
 
+        if source.allowed_asns or source.allowedASNs then cfg.allowed_asns = source.allowed_asns or source.allowedASNs end
+        if source.asn_db or source.asnDB then cfg.asn_db = source.asn_db or source.asnDB end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -640,6 +647,11 @@ function _M.new(opts)
         cfg.response.body = cfg.custom_response_text
     end
 
+    local methods_specified = false
+    if (file_opts and file_opts.methods) or (opts and opts.methods) then
+        methods_specified = true
+    end
+
     -- Process methods filter
     local methods_map = {}
     if cfg.methods and #cfg.methods > 0 then
@@ -650,7 +662,13 @@ function _M.new(opts)
             end
         end
     end
-    if not next(methods_map) then
+    if not methods_specified and (cfg.check_body or (cfg.check_body_patterns and #cfg.check_body_patterns > 0)) then
+        methods_map["GET"] = true
+        methods_map["POST"] = true
+        methods_map["PUT"] = true
+        methods_map["PATCH"] = true
+        methods_map["DELETE"] = true
+    elseif not next(methods_map) then
         methods_map["GET"] = true
     end
 
@@ -727,6 +745,8 @@ function _M.new(opts)
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
 
+    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json)
+    if not asn_matcher then return nil, asn_err end
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
         ip_matcher, err = ip_filter.new(all_allowed_ips, all_trusted_proxies)
@@ -745,6 +765,7 @@ function _M.new(opts)
         compiled_allow = compiled_allow,
         compiled_body = compiled_body,
         ip_matcher = ip_matcher,
+        asn_matcher = asn_matcher,
         response_handler = resp_handler,
         custom_log_sink = nil
     }
@@ -810,7 +831,8 @@ function _M:inspect(req_ctx)
     end
 
     local method = string.upper(req_ctx.method or (ngx and ngx.req and ngx.req.get_method and ngx.req.get_method()) or "GET")
-    if not self.methods[method] then
+    local has_wildcard = self.methods["*"] or self.methods["ALL"]
+    if not has_wildcard and not self.methods[method] then
         return true
     end
 
@@ -824,6 +846,10 @@ function _M:inspect(req_ctx)
             return true
         end
     end
+
+    local asn_ip = remote_addr
+    if self.ip_matcher and self.ip_matcher.has_trusted_proxies then asn_ip = client_ip end
+    if self.asn_matcher:is_allowed(asn_ip) then return true end
 
     -- Stage 2: Path Normalization
     local raw_uri = req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""
@@ -882,23 +908,47 @@ function _M:inspect(req_ctx)
     if not is_blocked and self.config.check_headers and #self.config.check_headers > 0 then
         for _, hdr_name in ipairs(self.config.check_headers) do
             local hdr_val = headers[string.lower(hdr_name)] or headers[hdr_name]
-            if hdr_val and hdr_val ~= "" then
-                local header_candidates = { hdr_val }
-                for _, hc in ipairs(normalizer.extract_candidate_paths(hdr_val, hdr_val, hdr_val)) do
-                    table.insert(header_candidates, hc)
-                end
-                for _, hc in ipairs(header_candidates) do
-                    for _, block_re in ipairs(self.compiled_block) do
-                        if block_re:match(hc) then
-                            is_blocked = true
-                            blocked_pattern = block_re.pattern
-                            blocked_target = hdr_val
-                            blocked_reason = "header_blocked"
-                            break
+            local raw_vals = {}
+            if type(hdr_val) == "table" then
+                raw_vals = hdr_val
+            elseif hdr_val ~= nil then
+                raw_vals = { tostring(hdr_val) }
+            end
+
+            for _, raw_v in ipairs(raw_vals) do
+                local val_str = tostring(raw_v)
+                if val_str ~= "" then
+                    local header_candidates = { val_str }
+                    for _, hc in ipairs(normalizer.extract_candidate_paths(val_str, val_str, val_str)) do
+                        table.insert(header_candidates, hc)
+                    end
+                    -- Also handle comma-separated values in headers
+                    if string.find(val_str, ",", 1, true) then
+                        for part in string.gmatch(val_str, "[^,]+") do
+                            local trimmed_part = string.match(part, "^%s*(.-)%s*$")
+                            if trimmed_part ~= "" and trimmed_part ~= val_str then
+                                table.insert(header_candidates, trimmed_part)
+                                for _, hc in ipairs(normalizer.extract_candidate_paths(trimmed_part, trimmed_part, trimmed_part)) do
+                                    table.insert(header_candidates, hc)
+                                end
+                            end
                         end
                     end
-                    if is_blocked then break end
+
+                    for _, hc in ipairs(header_candidates) do
+                        for _, block_re in ipairs(self.compiled_block) do
+                            if block_re:match(hc) then
+                                is_blocked = true
+                                blocked_pattern = block_re.pattern
+                                blocked_target = val_str
+                                blocked_reason = "header_blocked"
+                                break
+                            end
+                        end
+                        if is_blocked then break end
+                    end
                 end
+                if is_blocked then break end
             end
             if is_blocked then break end
         end

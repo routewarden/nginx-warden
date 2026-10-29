@@ -2,7 +2,7 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.6.0"
+    _VERSION = "1.7.0"
 }
 
 -- Check for standard OpenResty cjson / cjson.safe encoder
