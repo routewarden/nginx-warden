@@ -731,6 +731,76 @@ do
     print("  ✓ sensitive query parameter keys blocked when check_query enabled")
 end
 
+-- 46. AI Bot and User-Agent Blocking
+do
+    local routewarden = require("resty.routewarden")
+    -- Test train_only profile
+    local rw_train = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "train_only",
+        security_log = false
+    })
+    local pass_norm, _ = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0" }
+    })
+    assert(pass_norm == true, "Normal user-agent must be allowed")
+
+    local pass_gpt, b_gpt = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt == false, "GPTBot must be blocked under train_only")
+    assert(b_gpt.reason == "ai_bot_blocked")
+    assert(b_gpt.pattern == "ai_training_bot")
+
+    local pass_perp, _ = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp == true, "PerplexityBot must be allowed under train_only profile")
+
+    -- Test 'all' profile
+    local rw_all = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "all",
+        security_log = false
+    })
+    local pass_perp_all, b_perp_all = rw_all:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp_all == false, "PerplexityBot must be blocked under 'all' profile")
+    assert(b_perp_all.pattern == "ai_search_bot")
+
+    -- Test custom block_user_agents and allow_user_agents
+    local rw_custom = routewarden.new({
+        block_ai_bots = true,
+        block_user_agents = { "(?i)scrappy-scraper", "(?i)malicious-probe" },
+        allow_user_agents = { "(?i)partner-gptbot" },
+        security_log = false
+    })
+    local pass_scrappy, b_scrappy = rw_custom:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Scrappy-Scraper/1.0" }
+    })
+    assert(pass_scrappy == false, "Scrappy-Scraper must be blocked")
+    assert(b_scrappy.reason == "user_agent_blocked")
+
+    local pass_partner, _ = rw_custom:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Partner-GPTBot/2.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_partner == true, "allow_user_agents must bypass AI bot blocking")
+    print("  ✓ AI bot and User-Agent blocking verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

@@ -9,7 +9,7 @@ local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
 
 local _M = {
-    _VERSION = "1.7.0"
+    _VERSION = "1.8.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -599,7 +599,24 @@ function _M.new(opts)
         if ap then cfg.allow_patterns = ap end
 
         if source.allowed_asns or source.allowedASNs then cfg.allowed_asns = source.allowed_asns or source.allowedASNs end
+        if source.blocked_asns or source.blockedASNs then cfg.blocked_asns = source.blocked_asns or source.blockedASNs end
         if source.asn_db or source.asnDB then cfg.asn_db = source.asn_db or source.asnDB end
+
+        local block_ai = source.block_ai_bots
+        if block_ai == nil then block_ai = source.blockAIBots end
+        if block_ai ~= nil then cfg.block_ai_bots = block_ai end
+
+        local ai_prof = source.ai_bot_profile
+        if ai_prof == nil then ai_prof = source.aiBotProfile end
+        if ai_prof then cfg.ai_bot_profile = ai_prof end
+
+        local bua = source.block_user_agents
+        if bua == nil then bua = source.blockUserAgents end
+        if bua then cfg.block_user_agents = bua end
+
+        local aua = source.allow_user_agents
+        if aua == nil then aua = source.allowUserAgents end
+        if aua then cfg.allow_user_agents = aua end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -745,13 +762,37 @@ function _M.new(opts)
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
 
-    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json)
+    local blocked_asns = cfg.blocked_asns or cfg.blockedASNs
+    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json, blocked_asns)
     if not asn_matcher then return nil, asn_err end
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
         ip_matcher, err = ip_filter.new(all_allowed_ips, all_trusted_proxies)
         if not ip_matcher then
             error("routewarden init error: " .. tostring(err))
+        end
+    end
+
+    -- Compile user agent patterns
+    local all_block_ua = {}
+    add_entries(all_block_ua, cfg.block_user_agents or cfg.blockUserAgents)
+    local compiled_block_ua = {}
+    for _, p in ipairs(all_block_ua) do
+        local trimmed = string.match(p, "^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            local compiled = compile_regex(trimmed)
+            if compiled then table.insert(compiled_block_ua, compiled) end
+        end
+    end
+
+    local all_allow_ua = {}
+    add_entries(all_allow_ua, cfg.allow_user_agents or cfg.allowUserAgents)
+    local compiled_allow_ua = {}
+    for _, p in ipairs(all_allow_ua) do
+        local trimmed = string.match(p, "^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            local compiled = compile_regex(trimmed)
+            if compiled then table.insert(compiled_allow_ua, compiled) end
         end
     end
 
@@ -764,6 +805,8 @@ function _M.new(opts)
         compiled_block = compiled_block,
         compiled_allow = compiled_allow,
         compiled_body = compiled_body,
+        compiled_block_ua = compiled_block_ua,
+        compiled_allow_ua = compiled_allow_ua,
         ip_matcher = ip_matcher,
         asn_matcher = asn_matcher,
         response_handler = resp_handler,
@@ -850,6 +893,104 @@ function _M:inspect(req_ctx)
     local asn_ip = remote_addr
     if self.ip_matcher and self.ip_matcher.has_trusted_proxies then asn_ip = client_ip end
     if self.asn_matcher:is_allowed(asn_ip) then return true end
+
+    -- Stage 1b: Blocked ASN Check
+    local is_blocked_asn, blocked_asn_num = self.asn_matcher:is_blocked(asn_ip)
+    if is_blocked_asn then
+        local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+        local block_info = {
+            blocked = true,
+            status_code = self.config.status_code or 403,
+            reason = "asn_blocked",
+            pattern = "AS" .. tostring(blocked_asn_num),
+            matched_pattern = "AS" .. tostring(blocked_asn_num),
+            target = "AS" .. tostring(blocked_asn_num),
+            client_ip = client_ip,
+            method = method,
+            path = "AS" .. tostring(blocked_asn_num),
+            request_uri = req_ctx.raw_uri or "",
+            action = self.config.response and self.config.response.mode or "json",
+            user_agent = user_agent
+        }
+        if self.config.security_log ~= false then
+            logger.log_security_event(block_info, true, self.custom_log_sink)
+        end
+        return false, block_info
+    end
+
+    -- Stage 1c: User-Agent & AI Bot Inspection
+    local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+    local ua_allowed = false
+    for _, allow_ua in ipairs(self.compiled_allow_ua) do
+        if allow_ua:match(user_agent) then
+            ua_allowed = true
+            break
+        end
+    end
+
+    if not ua_allowed and user_agent ~= "" then
+        local ua_blocked = false
+        local ua_pattern = ""
+        local ua_reason = ""
+
+        for _, block_ua in ipairs(self.compiled_block_ua) do
+            if block_ua:match(user_agent) then
+                ua_blocked = true
+                ua_pattern = block_ua.pattern or block_ua.raw_regex
+                ua_reason = "user_agent_blocked"
+                break
+            end
+        end
+
+        local block_ai = self.config.block_ai_bots
+        if block_ai == nil then block_ai = self.config.blockAIBots end
+        if not ua_blocked and block_ai then
+            local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
+            local lower_ua = string.lower(user_agent)
+            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("google%-extended") or lower_ua:find("diffbot") or lower_ua:find("cohere")
+            local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
+            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot")
+
+            if profile == "all" then
+                if is_train_bot then
+                    ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_search_bot then
+                    ua_blocked = true; ua_pattern = "ai_search_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_aggr_bot then
+                    ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "aggressive" then
+                if is_aggr_bot then
+                    ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "train_only" then
+                if is_train_bot then
+                    ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
+                end
+            end
+        end
+
+        if ua_blocked then
+            local block_info = {
+                blocked = true,
+                status_code = self.config.status_code or 403,
+                reason = ua_reason,
+                pattern = ua_pattern,
+                matched_pattern = ua_pattern,
+                target = user_agent,
+                client_ip = client_ip,
+                method = method,
+                path = user_agent,
+                request_uri = req_ctx.raw_uri or "",
+                action = self.config.response and self.config.response.mode or "json",
+                user_agent = user_agent
+            }
+            if self.config.security_log ~= false then
+                logger.log_security_event(block_info, true, self.custom_log_sink)
+            end
+            return false, block_info
+        end
+    end
 
     -- Stage 2: Path Normalization
     local raw_uri = req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""

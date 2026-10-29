@@ -50,5 +50,16 @@ write('{"64500":["invalid"]}')
 assert(not rw.new({ allowed_asns = { '64500' }, asn_db = path }))
 -- Existing instances retain their validated snapshot after the file changes.
 assert(inspect(instance, '8.1.2.3'))
+
+-- Test blocked ASNs
+write('{"AS64500":["8.0.0.0/8","2001:db8::/32"],"64501":["8.8.8.0/24","2001:db8:1::/48"]}')
+local blocked_inst = assert(rw.new({ blocked_asns = { '64501' }, asn_db = path, security_log = false }))
+local ok_pass, _ = blocked_inst:inspect({ method = 'GET', uri = '/safe.html', raw_uri = '/safe.html', remote_addr = '8.1.2.3' })
+assert(ok_pass, 'safe IP in AS64500 should pass')
+local ok_block, block_info = blocked_inst:inspect({ method = 'GET', uri = '/safe.html', raw_uri = '/safe.html', remote_addr = '8.8.8.8' })
+assert(not ok_block, 'IP in AS64501 should be blocked')
+assert(block_info and block_info.reason == 'asn_blocked', 'reason should be asn_blocked')
+assert(block_info and block_info.pattern == 'AS64501', 'pattern should be AS64501')
+
 os.remove(path)
 print('ASN lookup, validation, IPv4/IPv6, longest-prefix and trusted-proxy tests passed')
