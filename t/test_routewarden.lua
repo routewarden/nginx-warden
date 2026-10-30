@@ -947,6 +947,8 @@ do
             ["user-agent"] = chrome_ua,
             ["accept-language"] = "en-US,en;q=0.9",
             ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
             ["sec-ch-ua-platform"] = '"Windows"',
             ["sec-fetch-site"] = "none",
             ["sec-fetch-mode"] = "navigate",
@@ -954,6 +956,44 @@ do
         }
     })
     assert(pass_legit == true, "legitimate Chrome must pass inspection")
+
+    -- 3b. Mobile mismatch: Desktop Windows UA with Sec-CH-UA-Mobile: ?1
+    local pass_mob, b_mob = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?1",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_mob == false, "mobile mismatch must be blocked")
+    assert(b_mob.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_mob.pattern == "sec_ch_ua_mobile_mismatch", "pattern must be sec_ch_ua_mobile_mismatch")
+
+    -- 3c. Missing Sec-CH-UA on modern Chrome with Sec-CH-UA-Platform
+    local pass_noch, b_noch = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_noch == false, "missing sec-ch-ua must be blocked")
+    assert(b_noch.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_noch.pattern == "missing_sec_ch_ua", "pattern must be missing_sec_ch_ua")
 
     -- 4. Script client (python-requests) -> blocked
     local pass_script, b_script = rw_fingerprint:inspect({
@@ -974,6 +1014,8 @@ do
             ["user-agent"] = chrome_ua,
             ["accept-language"] = "en-US,en;q=0.9",
             ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
             ["sec-ch-ua-platform"] = '"Windows"',
             ["sec-fetch-site"] = "none",
             ["sec-fetch-mode"] = "navigate",

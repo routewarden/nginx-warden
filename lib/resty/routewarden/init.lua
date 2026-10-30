@@ -1000,7 +1000,7 @@ local function detect_browser_impersonation(ua, headers)
         local claimed_mac = lower_ua:find("macintosh") ~= nil or lower_ua:find("mac os x") ~= nil
         local claimed_linux = lower_ua:find("linux") ~= nil and lower_ua:find("android") == nil
         local claimed_android = lower_ua:find("android") ~= nil
-        local claimed_ios = lower_ua:find("iphone") ~= nil or lower_ua:find("ipad") ~= nil
+        local claimed_ios = lower_ua:find("iphone") ~= nil or lower_ua:find("ipad") ~= nil or lower_ua:find("ipod") ~= nil
 
         if plat == "windows" and not claimed_win then
             return true, "sec_ch_ua_platform_mismatch"
@@ -1015,16 +1015,50 @@ local function detect_browser_impersonation(ua, headers)
         end
     end
 
-    -- 3. Modern Chrome Fetch Metadata
+    -- 3. Client Hints mobile check
+    local sec_mobile_raw = headers["sec-ch-ua-mobile"] or headers["Sec-CH-UA-Mobile"] or ""
+    if sec_mobile_raw ~= "" then
+        local sec_mobile = string.gsub(sec_mobile_raw, '[%s"?]', '')
+        local claimed_mobile = lower_ua:find("mobile") ~= nil or lower_ua:find("iphone") ~= nil or lower_ua:find("ipod") ~= nil or lower_ua:find("android") ~= nil
+
+        if sec_mobile == "1" and not claimed_mobile then
+            return true, "sec_ch_ua_mobile_mismatch"
+        end
+        if sec_mobile == "0" then
+            if lower_ua:find("iphone") ~= nil or lower_ua:find("ipod") ~= nil or (lower_ua:find("android") ~= nil and lower_ua:find("mobile") ~= nil) then
+                return true, "sec_ch_ua_mobile_mismatch"
+            end
+        end
+    end
+
+    -- 4. Client Hints brand check
+    local sec_ch_ua = headers["sec-ch-ua"] or headers["Sec-CH-UA"] or ""
+    if sec_ch_ua ~= "" then
+        local is_firefox = lower_ua:find("firefox") ~= nil
+        local is_safari_only = lower_ua:find("safari") ~= nil and lower_ua:find("chrome") == nil and lower_ua:find("chromium") == nil and lower_ua:find("edg") == nil
+        if (is_firefox or is_safari_only) and string.find(string.lower(sec_ch_ua), "chromium") then
+            return true, "sec_ch_ua_brand_mismatch"
+        end
+    end
+
+    -- 5. Modern Chrome Fetch Metadata & Client Hints
     local chrome_ver = string.match(ua, "[Cc]hrome/(%d+)") or string.match(ua, "[Cc]hromium/(%d+)") or string.match(ua, "[Ee]dg/(%d+)")
     if chrome_ver then
         local ver_num = tonumber(chrome_ver)
-        if ver_num and ver_num >= 90 then
-            local fetch_site = headers["sec-fetch-site"] or headers["Sec-Fetch-Site"] or ""
-            local fetch_mode = headers["sec-fetch-mode"] or headers["Sec-Fetch-Mode"] or ""
-            local fetch_dest = headers["sec-fetch-dest"] or headers["Sec-Fetch-Dest"] or ""
-            if fetch_site == "" and fetch_mode == "" and fetch_dest == "" then
-                return true, "missing_sec_fetch"
+        if ver_num then
+            if ver_num >= 89 and sec_platform ~= "" and sec_ch_ua == "" then
+                return true, "missing_sec_ch_ua"
+            end
+            if ver_num >= 90 then
+                local fetch_site = headers["sec-fetch-site"] or headers["Sec-Fetch-Site"] or ""
+                local fetch_mode = headers["sec-fetch-mode"] or headers["Sec-Fetch-Mode"] or ""
+                local fetch_dest = headers["sec-fetch-dest"] or headers["Sec-Fetch-Dest"] or ""
+                if fetch_site == "" and fetch_mode == "" and fetch_dest == "" then
+                    return true, "missing_sec_fetch"
+                end
+                if string.lower(fetch_dest) == "document" and fetch_mode ~= "" and string.lower(fetch_mode) ~= "navigate" then
+                    return true, "sec_fetch_mode_mismatch"
+                end
             end
         end
     end
@@ -1037,17 +1071,20 @@ local function detect_script_client(ua, headers)
     if headers["x-puppeteer"] or headers["X-Puppeteer"] then return true, "puppeteer_headless" end
     if headers["x-selenium"] or headers["X-Selenium"] then return true, "selenium_headless" end
     if headers["x-scrapy"] or headers["X-Scrapy"] then return true, "scrapy_crawler" end
-    if headers["sec-webdriver"] or headers["Sec-WebDriver"] or headers["x-headless"] or headers["X-Headless"] then
+    if headers["x-cypress"] or headers["X-Cypress"] then return true, "cypress_headless" end
+    if headers["sec-webdriver"] or headers["Sec-WebDriver"] or headers["x-headless"] or headers["X-Headless"] or headers["x-headless-chrome"] or headers["X-Headless-Chrome"] or headers["x-automation"] or headers["X-Automation"] then
         return true, "webdriver_automation"
     end
 
     if ua and ua ~= "" then
         local lower_ua = string.lower(ua)
         local script_patterns = {
-            "python%-requests", "requests/", "aiohttp", "httpx", "scrapy", "urllib", "tornado",
+            "python%-requests", "requests/", "aiohttp", "httpx", "scrapy", "urllib", "tornado", "curl%-cffi", "mechanize",
             "axios", "node%-fetch", "undici", "got/", "superagent", "needle/",
             "go%-http%-client",
             "okhttp", "apache%-httpclient", "java/", "httpclient",
+            "guzzlehttp", "guzzle/",
+            "reqwest/",
             "faraday", "httparty", "rest%-client",
             "curl/", "wget/", "libwww%-perl", "phantomjs", "headlesschrome", "puppeteer", "playwright"
         }
