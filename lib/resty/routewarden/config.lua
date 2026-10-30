@@ -80,6 +80,8 @@ function _M.default_config()
         ai_bot_profile = "train_only",
         block_user_agents = {},
         allow_user_agents = {},
+        honeypot_trap_paths = {},
+        trap_ban_duration = "24h",
         methods = { "GET" },
         check_query = false,
         check_headers = {},

@@ -450,7 +450,26 @@ local function normalize_json_config(raw)
     elseif raw.allowPatterns ~= nil then t.allow_patterns = raw.allowPatterns end
 
     t.allowed_asns = raw.allowed_asns or raw.allowedASNs
+    t.blocked_asns = raw.blocked_asns or raw.blockedASNs
     t.asn_db = raw.asn_db or raw.asnDB
+    if raw.block_ai_bots ~= nil then t.block_ai_bots = raw.block_ai_bots
+    elseif raw.blockAIBots ~= nil then t.block_ai_bots = raw.blockAIBots end
+
+    if raw.ai_bot_profile ~= nil then t.ai_bot_profile = raw.ai_bot_profile
+    elseif raw.aiBotProfile ~= nil then t.ai_bot_profile = raw.aiBotProfile end
+
+    if raw.block_user_agents ~= nil then t.block_user_agents = raw.block_user_agents
+    elseif raw.blockUserAgents ~= nil then t.block_user_agents = raw.blockUserAgents end
+
+    if raw.allow_user_agents ~= nil then t.allow_user_agents = raw.allow_user_agents
+    elseif raw.allowUserAgents ~= nil then t.allow_user_agents = raw.allowUserAgents end
+
+    if raw.honeypot_trap_paths ~= nil then t.honeypot_trap_paths = raw.honeypot_trap_paths
+    elseif raw.honeypotTrapPaths ~= nil then t.honeypot_trap_paths = raw.honeypotTrapPaths end
+
+    if raw.trap_ban_duration ~= nil then t.trap_ban_duration = raw.trap_ban_duration
+    elseif raw.trapBanDuration ~= nil then t.trap_ban_duration = raw.trapBanDuration end
+
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -617,6 +636,14 @@ function _M.new(opts)
         local aua = source.allow_user_agents
         if aua == nil then aua = source.allowUserAgents end
         if aua then cfg.allow_user_agents = aua end
+
+        local htp = source.honeypot_trap_paths
+        if htp == nil then htp = source.honeypotTrapPaths end
+        if htp then cfg.honeypot_trap_paths = htp end
+
+        local tbd = source.trap_ban_duration
+        if tbd == nil then tbd = source.trapBanDuration end
+        if tbd then cfg.trap_ban_duration = tbd end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -799,6 +826,22 @@ function _M.new(opts)
     -- Initialize Response Handler
     local resp_handler = response.new(cfg.response)
 
+    local function parse_ban_duration(dur)
+        if type(dur) == "number" then return dur end
+        if not dur or dur == "" then return 86400 end
+        local n, unit = string.match(dur, "^(%d+)([smhd]?)$")
+        if not n then
+            local num = tonumber(dur)
+            return num or 86400
+        end
+        n = tonumber(n)
+        if unit == "s" or unit == "" then return n end
+        if unit == "m" then return n * 60 end
+        if unit == "h" then return n * 3600 end
+        if unit == "d" then return n * 86400 end
+        return 86400
+    end
+
     local self = {
         config = cfg,
         methods = methods_map,
@@ -810,10 +853,22 @@ function _M.new(opts)
         ip_matcher = ip_matcher,
         asn_matcher = asn_matcher,
         response_handler = resp_handler,
-        custom_log_sink = nil
+        custom_log_sink = nil,
+        ban_table = {},
+        parsed_ban_duration = parse_ban_duration(cfg.trap_ban_duration)
     }
 
     return setmetatable(self, { __index = _M })
+end
+
+local function normalize_ip(ip)
+    if not ip or ip == "" then return "" end
+    local clean = string.match(ip, "^%s*(.-)%s*$")
+    local ipv4 = string.match(clean, "^(%d+%.%d+%.%d+%.%d+):%d+$")
+    if ipv4 then return ipv4 end
+    local ipv6 = string.match(clean, "^%[([%a%d:]+)%]:%d+$")
+    if ipv6 then return ipv6 end
+    return clean
 end
 
 local VALID_MODES = {
@@ -835,7 +890,13 @@ local VALID_MODES = {
     proxy = true,
     infinitestream = true,
     infinite_stream = true,
-    xml = true
+    xml = true,
+    aipoison = true,
+    ai_poison = true,
+    markovtarpit = true,
+    markov_tarpit = true,
+    tokenbleed = true,
+    token_bleed = true
 }
 
 -- Validate configuration (returns true, or false, err)
@@ -918,7 +979,35 @@ function _M:inspect(req_ctx)
         return false, block_info
     end
 
-    -- Stage 1c: User-Agent & AI Bot Inspection
+    -- Stage 1c: Active Ban Table Check
+    local norm_ip = normalize_ip(client_ip)
+    if self.ban_table and self.ban_table[norm_ip] then
+        if self.ban_table[norm_ip] > os.time() then
+            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+            local block_info = {
+                blocked = true,
+                status_code = self.config.status_code or 403,
+                reason = "ip_banned",
+                pattern = "ban_table",
+                matched_pattern = "ban_table",
+                target = client_ip,
+                client_ip = client_ip,
+                method = method,
+                path = client_ip,
+                request_uri = req_ctx.raw_uri or "",
+                action = self.config.response and self.config.response.mode or "json",
+                user_agent = user_agent
+            }
+            if self.config.security_log ~= false then
+                logger.log_security_event(block_info, true, self.custom_log_sink)
+            end
+            return false, block_info
+        else
+            self.ban_table[norm_ip] = nil
+        end
+    end
+
+    -- Stage 1d: User-Agent & AI Bot Inspection
     local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
     local ua_allowed = false
     for _, allow_ua in ipairs(self.compiled_allow_ua) do
@@ -996,6 +1085,52 @@ function _M:inspect(req_ctx)
     local raw_uri = req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""
     local uri = req_ctx.uri or (ngx and ngx.var and ngx.var.uri) or "/"
     local candidate_paths = normalizer.extract_candidate_paths(raw_uri, uri, raw_uri)
+
+    -- Stage 2b: Honeypot Spider Trap Check
+    if self.config.honeypot_trap_paths and #self.config.honeypot_trap_paths > 0 then
+        local trap_triggered = false
+        local matched_trap = ""
+        local matched_path = ""
+        for _, path_cand in ipairs(candidate_paths) do
+            for _, trap_path in ipairs(self.config.honeypot_trap_paths) do
+                local clean_trap = string.match(trap_path, "^%s*(.-)%s*$")
+                if clean_trap ~= "" then
+                    if path_cand == clean_trap or (string.sub(clean_trap, -1) == "/" and string.sub(path_cand, 1, #clean_trap) == clean_trap) then
+                        trap_triggered = true
+                        matched_trap = clean_trap
+                        matched_path = path_cand
+                        break
+                    end
+                end
+            end
+            if trap_triggered then break end
+        end
+
+        if trap_triggered then
+            if self.ban_table then
+                self.ban_table[norm_ip] = os.time() + self.parsed_ban_duration
+            end
+            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+            local block_info = {
+                blocked = true,
+                status_code = self.config.status_code or 403,
+                reason = "honeypot_trap_triggered",
+                pattern = matched_trap,
+                matched_pattern = matched_trap,
+                target = matched_path,
+                client_ip = client_ip,
+                method = method,
+                path = matched_path,
+                request_uri = req_ctx.raw_uri or "",
+                action = self.config.response and self.config.response.mode or "json",
+                user_agent = user_agent
+            }
+            if self.config.security_log ~= false then
+                logger.log_security_event(block_info, true, self.custom_log_sink)
+            end
+            return false, block_info
+        end
+    end
 
     -- Stage 3: Allow Patterns Match (Precedence over blocklist)
     for _, path_cand in ipairs(candidate_paths) do

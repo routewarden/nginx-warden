@@ -801,6 +801,54 @@ do
     print("  ✓ AI bot and User-Agent blocking verified")
 end
 
+-- 47. Honeypot Spider Traps & In-Memory Ban Table
+do
+    local rw_trap = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "/hidden-spider-trap", "/crawler-trap/" },
+        trap_ban_duration = "1h",
+        security_log = false
+    })
+
+    local client_ip = "198.51.100.77"
+    local other_ip = "203.0.113.88"
+
+    -- 1. Legitimate request passes
+    local pass_legit, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = client_ip
+    })
+    assert(pass_legit == true, "initial legitimate request must pass")
+
+    -- 2. Crawler trips honeypot trap
+    local pass_trap, b_trap = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap",
+        remote_addr = client_ip
+    })
+    assert(pass_trap == false, "honeypot trap hit must be blocked")
+    assert(b_trap.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 3. Subsequent request to legitimate path is blocked due to active ban
+    local pass_banned, b_banned = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = client_ip
+    })
+    assert(pass_banned == false, "subsequent request must be blocked by active ban table")
+    assert(b_banned.reason == "ip_banned", "reason must be ip_banned")
+
+    -- 4. Different IP is not banned
+    local pass_other, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = other_ip
+    })
+    assert(pass_other == true, "unbanned client IP must pass")
+    print("  ✓ Honeypot spider traps and in-memory ban table verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 
