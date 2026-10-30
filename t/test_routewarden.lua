@@ -986,6 +986,21 @@ do
     print("  ✓ Browser impersonation and script client detection verified")
 end
 
+-- 50. Exported helper function tests
+do
+    assert(routewarden.detect_search_engine("Googlebot/2.1") == "google")
+    assert(routewarden.detect_search_engine("bingbot/2.0") == "bing")
+    assert(routewarden.detect_search_engine("Applebot/0.1") == "apple")
+    assert(routewarden.detect_search_engine("curl/7.68.0") == nil)
+
+    local is_script, name = routewarden.detect_script_client("python-requests/2.28.0", {})
+    assert(is_script == true and name == "python-requests")
+
+    local is_spoofed, reason = routewarden.detect_browser_impersonation("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0", {})
+    assert(is_spoofed == true and reason == "missing_accept_language")
+    print("  ✓ Exported helper functions verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

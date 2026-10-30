@@ -1061,6 +1061,26 @@ local function detect_script_client(ua, headers)
     return false, nil
 end
 
+_M.detect_search_engine = detect_search_engine
+_M.detect_browser_impersonation = detect_browser_impersonation
+_M.detect_script_client = detect_script_client
+
+local function is_valid_host_for_engine(host, engine)
+    if not host or not engine then return false end
+    local h = string.lower(host)
+    if string.sub(h, -1) == "." then
+        h = string.sub(h, 1, -2)
+    end
+    if engine == "google" then
+        return string.find(h, "%.googlebot%.com$") ~= nil or string.find(h, "%.google%.com$") ~= nil or h == "googlebot.com" or h == "google.com"
+    elseif engine == "bing" then
+        return string.find(h, "%.search%.msn%.com$") ~= nil or h == "search.msn.com"
+    elseif engine == "apple" then
+        return string.find(h, "%.applebot%.apple%.com$") ~= nil or h == "applebot.apple.com"
+    end
+    return false
+end
+
 function _M:verify_fcrdns(client_ip, engine)
     if self.custom_fcrdns_verifier then
         return self.custom_fcrdns_verifier(client_ip, engine)
@@ -1073,7 +1093,53 @@ function _M:verify_fcrdns(client_ip, engine)
             return entry.valid
         end
     end
-    return false
+
+    -- Attempt dynamic FCrDNS resolution via OpenResty's resty.dns.resolver if available
+    local valid = false
+    local has_resolver, resty_resolver = pcall(require, "resty.dns.resolver")
+    if has_resolver and resty_resolver and ngx and ngx.socket then
+        local r, _ = resty_resolver:new{
+            nameservers = {"8.8.8.8", "1.1.1.1"},
+            retrans = 2,
+            timeout = 500,
+        }
+        if r then
+            local arpa = nil
+            local o1, o2, o3, o4 = string.match(norm_ip, "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+            if o1 then
+                arpa = string.format("%s.%s.%s.%s.in-addr.arpa", o4, o3, o2, o1)
+            end
+            if arpa then
+                local answers, _ = r:query(arpa, { qtype = r.TYPE_PTR })
+                if answers and not answers.errcode then
+                    for _, ans in ipairs(answers) do
+                        if ans.ptrdname and is_valid_host_for_engine(ans.ptrdname, engine) then
+                            local fwd_answers, _ = r:query(ans.ptrdname, { qtype = r.TYPE_A })
+                            if fwd_answers and not fwd_answers.errcode then
+                                for _, f_ans in ipairs(fwd_answers) do
+                                    if f_ans.address == norm_ip then
+                                        valid = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        if valid then break end
+                    end
+                end
+            end
+        end
+    end
+
+    if not self.fcrdns_cache then
+        self.fcrdns_cache = {}
+    end
+    self.fcrdns_cache[cache_key] = {
+        valid = valid,
+        expires = os.time() + 21600 -- 6 hours TTL
+    }
+
+    return valid
 end
 
 -- Primary inspection routine
