@@ -470,6 +470,9 @@ local function normalize_json_config(raw)
     if raw.trap_ban_duration ~= nil then t.trap_ban_duration = raw.trap_ban_duration
     elseif raw.trapBanDuration ~= nil then t.trap_ban_duration = raw.trapBanDuration end
 
+    if raw.verify_search_engine_bots ~= nil then t.verify_search_engine_bots = raw.verify_search_engine_bots
+    elseif raw.verifySearchEngineBots ~= nil then t.verify_search_engine_bots = raw.verifySearchEngineBots end
+
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -644,6 +647,10 @@ function _M.new(opts)
         local tbd = source.trap_ban_duration
         if tbd == nil then tbd = source.trapBanDuration end
         if tbd then cfg.trap_ban_duration = tbd end
+
+        local vseb = source.verify_search_engine_bots
+        if vseb == nil then vseb = source.verifySearchEngineBots end
+        if vseb ~= nil then cfg.verify_search_engine_bots = vseb end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -855,7 +862,9 @@ function _M.new(opts)
         response_handler = resp_handler,
         custom_log_sink = nil,
         ban_table = {},
-        parsed_ban_duration = parse_ban_duration(cfg.trap_ban_duration)
+        parsed_ban_duration = parse_ban_duration(cfg.trap_ban_duration),
+        fcrdns_cache = {},
+        custom_fcrdns_verifier = nil
     }
 
     return setmetatable(self, { __index = _M })
@@ -925,6 +934,40 @@ end
 -- Set custom log sink for testing
 function _M:set_log_sink(sink)
     self.custom_log_sink = sink
+end
+
+function _M:set_fcrdns_verifier(verifier)
+    self.custom_fcrdns_verifier = verifier
+end
+
+local function detect_search_engine(ua)
+    if not ua or ua == "" then return nil end
+    local lower = string.lower(ua)
+    if lower:find("googlebot") or lower:find("google%-inspectiontool") or lower:find("google%-other") or lower:find("adsbot%-google") then
+        return "google"
+    end
+    if lower:find("bingbot") or lower:find("bingpreview") then
+        return "bing"
+    end
+    if lower:find("applebot") then
+        return "apple"
+    end
+    return nil
+end
+
+function _M:verify_fcrdns(client_ip, engine)
+    if self.custom_fcrdns_verifier then
+        return self.custom_fcrdns_verifier(client_ip, engine)
+    end
+    local norm_ip = normalize_ip(client_ip)
+    local cache_key = engine .. ":" .. norm_ip
+    if self.fcrdns_cache and self.fcrdns_cache[cache_key] ~= nil then
+        local entry = self.fcrdns_cache[cache_key]
+        if entry.expires > os.time() then
+            return entry.valid
+        end
+    end
+    return false
 end
 
 -- Primary inspection routine
@@ -1014,6 +1057,35 @@ function _M:inspect(req_ctx)
         if allow_ua:match(user_agent) then
             ua_allowed = true
             break
+        end
+    end
+
+    if not ua_allowed and self.config.verify_search_engine_bots then
+        local engine = detect_search_engine(user_agent)
+        if engine then
+            local is_verified = self:verify_fcrdns(client_ip, engine)
+            if not is_verified then
+                local block_info = {
+                    blocked = true,
+                    status_code = self.config.status_code or 403,
+                    reason = "search_engine_spoofed",
+                    pattern = engine .. "_spoofed",
+                    matched_pattern = engine .. "_spoofed",
+                    target = user_agent,
+                    client_ip = client_ip,
+                    method = method,
+                    path = user_agent,
+                    request_uri = req_ctx.raw_uri or "",
+                    action = self.config.response and self.config.response.mode or "json",
+                    user_agent = user_agent
+                }
+                if self.config.security_log ~= false then
+                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                end
+                return false, block_info
+            else
+                ua_allowed = true
+            end
         end
     end
 

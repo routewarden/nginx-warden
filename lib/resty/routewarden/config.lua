@@ -82,6 +82,7 @@ function _M.default_config()
         allow_user_agents = {},
         honeypot_trap_paths = {},
         trap_ban_duration = "24h",
+        verify_search_engine_bots = false,
         methods = { "GET" },
         check_query = false,
         check_headers = {},

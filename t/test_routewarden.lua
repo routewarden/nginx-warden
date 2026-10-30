@@ -849,6 +849,54 @@ do
     print("  ✓ Honeypot spider traps and in-memory ban table verified")
 end
 
+-- 48. Search Engine Impersonation Detection (FCrDNS)
+do
+    local rw_fcrdns = routewarden.new({
+        enable_default_patterns = false,
+        verify_search_engine_bots = true,
+        block_ai_bots = true,
+        security_log = false
+    })
+
+    -- Mock verifier
+    rw_fcrdns:set_fcrdns_verifier(function(ip, engine)
+        if ip == "66.249.66.1" and engine == "google" then
+            return true
+        end
+        return false
+    end)
+
+    -- 1. Legitimate Googlebot passes
+    local pass_legit, _ = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "66.249.66.1",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }
+    })
+    assert(pass_legit == true, "genuine Googlebot must pass FCrDNS check")
+
+    -- 2. Spoofed Googlebot from attacker IP is blocked
+    local pass_spoof, b_spoof = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "198.51.100.99",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }
+    })
+    assert(pass_spoof == false, "spoofed Googlebot must fail FCrDNS check")
+    assert(b_spoof.reason == "search_engine_spoofed", "reason must be search_engine_spoofed")
+    assert(b_spoof.pattern == "google_spoofed", "pattern must be google_spoofed")
+
+    -- 3. Normal user passes
+    local pass_user, _ = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "198.51.100.99",
+        headers = { ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0" }
+    })
+    assert(pass_user == true, "normal browser user must pass without FCrDNS check")
+    print("  ✓ Search engine impersonation detection (FCrDNS) verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 
