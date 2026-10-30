@@ -777,6 +777,28 @@ do
     assert(pass_perp_all == false, "PerplexityBot must be blocked under 'all' profile")
     assert(b_perp_all.pattern == "ai_search_bot")
 
+    local pass_fb, b_fb = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php FacebookBot)" }
+    })
+    assert(pass_fb == false, "FacebookBot must be blocked under train_only")
+    assert(b_fb.pattern == "ai_training_bot")
+
+    -- Test 'aggressive' profile
+    local rw_aggr = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "aggressive",
+        security_log = false
+    })
+    local pass_diff, b_diff = rw_aggr:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Diffbot/0.1; (+http://www.diffbot.com)" }
+    })
+    assert(pass_diff == false, "Diffbot must be blocked under aggressive profile")
+    assert(b_diff.pattern == "ai_aggressive_bot")
+
     -- Test custom block_user_agents and allow_user_agents
     local rw_custom = routewarden.new({
         block_ai_bots = true,

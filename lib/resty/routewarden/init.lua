@@ -1317,9 +1317,9 @@ function _M:inspect(req_ctx)
         if not ua_blocked and block_ai then
             local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
             local lower_ua = string.lower(user_agent)
-            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("google%-extended") or lower_ua:find("diffbot") or lower_ua:find("cohere")
+            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot")
             local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
-            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot")
+            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot") or lower_ua:find("diffbot")
 
             if profile == "all" then
                 if is_train_bot then
