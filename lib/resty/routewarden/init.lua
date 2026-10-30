@@ -473,6 +473,12 @@ local function normalize_json_config(raw)
     if raw.verify_search_engine_bots ~= nil then t.verify_search_engine_bots = raw.verify_search_engine_bots
     elseif raw.verifySearchEngineBots ~= nil then t.verify_search_engine_bots = raw.verifySearchEngineBots end
 
+    if raw.detect_browser_impersonation ~= nil then t.detect_browser_impersonation = raw.detect_browser_impersonation
+    elseif raw.detectBrowserImpersonation ~= nil then t.detect_browser_impersonation = raw.detectBrowserImpersonation end
+
+    if raw.block_script_clients ~= nil then t.block_script_clients = raw.block_script_clients
+    elseif raw.blockScriptClients ~= nil then t.block_script_clients = raw.blockScriptClients end
+
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -651,6 +657,14 @@ function _M.new(opts)
         local vseb = source.verify_search_engine_bots
         if vseb == nil then vseb = source.verifySearchEngineBots end
         if vseb ~= nil then cfg.verify_search_engine_bots = vseb end
+
+        local dbi = source.detect_browser_impersonation
+        if dbi == nil then dbi = source.detectBrowserImpersonation end
+        if dbi ~= nil then cfg.detect_browser_impersonation = dbi end
+
+        local bsc = source.block_script_clients
+        if bsc == nil then bsc = source.blockScriptClients end
+        if bsc ~= nil then cfg.block_script_clients = bsc end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -955,6 +969,98 @@ local function detect_search_engine(ua)
     return nil
 end
 
+local function detect_browser_impersonation(ua, headers)
+    if not ua or ua == "" then return false, nil end
+    local lower_ua = string.lower(ua)
+    local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+    if not is_browser then return false, nil end
+
+    -- Search engine exemption (e.g. Googlebot)
+    if detect_search_engine(ua) then
+        return false, nil
+    end
+
+    -- 1. Mandatory companion headers
+    local accept_lang = headers["accept-language"] or headers["Accept-Language"] or ""
+    if accept_lang == "" then
+        return true, "missing_accept_language"
+    end
+
+    local accept_enc = headers["accept-encoding"] or headers["Accept-Encoding"] or ""
+    if accept_enc == "" then
+        return true, "missing_accept_encoding"
+    end
+
+    -- 2. Client Hints platform check
+    local sec_platform = headers["sec-ch-ua-platform"] or headers["Sec-CH-UA-Platform"] or ""
+    if sec_platform ~= "" then
+        local plat = string.lower(string.gsub(sec_platform, '"', ''))
+        plat = string.match(plat, "^%s*(.-)%s*$")
+        local claimed_win = lower_ua:find("windows") ~= nil
+        local claimed_mac = lower_ua:find("macintosh") ~= nil or lower_ua:find("mac os x") ~= nil
+        local claimed_linux = lower_ua:find("linux") ~= nil and lower_ua:find("android") == nil
+        local claimed_android = lower_ua:find("android") ~= nil
+        local claimed_ios = lower_ua:find("iphone") ~= nil or lower_ua:find("ipad") ~= nil
+
+        if plat == "windows" and not claimed_win then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif (plat == "macos" or plat == "mac os x") and not claimed_mac then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "linux" and not claimed_linux then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "android" and not claimed_android then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "ios" and not claimed_ios then
+            return true, "sec_ch_ua_platform_mismatch"
+        end
+    end
+
+    -- 3. Modern Chrome Fetch Metadata
+    local chrome_ver = string.match(ua, "[Cc]hrome/(%d+)") or string.match(ua, "[Cc]hromium/(%d+)") or string.match(ua, "[Ee]dg/(%d+)")
+    if chrome_ver then
+        local ver_num = tonumber(chrome_ver)
+        if ver_num and ver_num >= 90 then
+            local fetch_site = headers["sec-fetch-site"] or headers["Sec-Fetch-Site"] or ""
+            local fetch_mode = headers["sec-fetch-mode"] or headers["Sec-Fetch-Mode"] or ""
+            local fetch_dest = headers["sec-fetch-dest"] or headers["Sec-Fetch-Dest"] or ""
+            if fetch_site == "" and fetch_mode == "" and fetch_dest == "" then
+                return true, "missing_sec_fetch"
+            end
+        end
+    end
+
+    return false, nil
+end
+
+local function detect_script_client(ua, headers)
+    if headers["x-playwright"] or headers["X-Playwright"] then return true, "playwright_headless" end
+    if headers["x-puppeteer"] or headers["X-Puppeteer"] then return true, "puppeteer_headless" end
+    if headers["x-selenium"] or headers["X-Selenium"] then return true, "selenium_headless" end
+    if headers["x-scrapy"] or headers["X-Scrapy"] then return true, "scrapy_crawler" end
+    if headers["sec-webdriver"] or headers["Sec-WebDriver"] or headers["x-headless"] or headers["X-Headless"] then
+        return true, "webdriver_automation"
+    end
+
+    if ua and ua ~= "" then
+        local lower_ua = string.lower(ua)
+        local script_patterns = {
+            "python%-requests", "requests/", "aiohttp", "httpx", "scrapy", "urllib", "tornado",
+            "axios", "node%-fetch", "undici", "got/", "superagent", "needle/",
+            "go%-http%-client",
+            "okhttp", "apache%-httpclient", "java/", "httpclient",
+            "faraday", "httparty", "rest%-client",
+            "curl/", "wget/", "libwww%-perl", "phantomjs", "headlesschrome", "puppeteer", "playwright"
+        }
+        for _, pat in ipairs(script_patterns) do
+            if string.find(lower_ua, pat) then
+                return true, string.gsub(pat, "%%", "")
+            end
+        end
+    end
+
+    return false, nil
+end
+
 function _M:verify_fcrdns(client_ip, engine)
     if self.custom_fcrdns_verifier then
         return self.custom_fcrdns_verifier(client_ip, engine)
@@ -1128,6 +1234,24 @@ function _M:inspect(req_ctx)
                 if is_train_bot then
                     ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
                 end
+            end
+        end
+
+        if not ua_blocked and self.config.detect_browser_impersonation then
+            local is_spoofed, reason = detect_browser_impersonation(user_agent, headers)
+            if is_spoofed then
+                ua_blocked = true
+                ua_pattern = reason
+                ua_reason = "browser_spoofed"
+            end
+        end
+
+        if not ua_blocked and self.config.block_script_clients then
+            local is_script, client_type = detect_script_client(user_agent, headers)
+            if is_script then
+                ua_blocked = true
+                ua_pattern = client_type
+                ua_reason = "script_client_blocked"
             end
         end
 

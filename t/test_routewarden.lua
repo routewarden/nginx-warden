@@ -897,6 +897,95 @@ do
     print("  ✓ Search engine impersonation detection (FCrDNS) verified")
 end
 
+-- 49. Browser Impersonation & Script Client Detection
+do
+    local rw_fingerprint = routewarden.new({
+        enable_default_patterns = false,
+        detect_browser_impersonation = true,
+        block_script_clients = true,
+        security_log = false
+    })
+
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+    -- 1. Spoofed Chrome (missing Accept-Language) -> blocked
+    local pass_spoof, b_spoof = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-encoding"] = "gzip, deflate, br"
+        }
+    })
+    assert(pass_spoof == false, "spoofed Chrome without Accept-Language must be blocked")
+    assert(b_spoof.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_spoof.pattern == "missing_accept_language", "pattern must be missing_accept_language")
+
+    -- 2. Platform mismatch: Windows UA but Linux in Sec-CH-UA-Platform
+    local pass_plat, b_plat = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Linux"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_plat == false, "platform mismatch must be blocked")
+    assert(b_plat.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_plat.pattern == "sec_ch_ua_platform_mismatch", "pattern must be sec_ch_ua_platform_mismatch")
+
+    -- 3. Legitimate Chrome with all companion headers -> passed
+    local pass_legit, _ = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_legit == true, "legitimate Chrome must pass inspection")
+
+    -- 4. Script client (python-requests) -> blocked
+    local pass_script, b_script = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "python-requests/2.31.0"
+        }
+    })
+    assert(pass_script == false, "python-requests must be blocked")
+    assert(b_script.reason == "script_client_blocked", "reason must be script_client_blocked")
+
+    -- 5. Playwright headless header -> blocked
+    local pass_hw, b_hw = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document",
+            ["x-playwright"] = "true"
+        }
+    })
+    assert(pass_hw == false, "playwright header must be blocked")
+    assert(b_hw.reason == "script_client_blocked", "reason must be script_client_blocked")
+    print("  ✓ Browser impersonation and script client detection verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 
