@@ -1146,6 +1146,48 @@ do
         headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
     })
     assert(pass_gpt_override == false, "GPTBot should be blocked with standard level in override")
+
+    -- 5. Amazonbot and Anthropic AI bot defense tests
+    local pass_amz, b_amz = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Amazonbot/0.1; +https://developer.amazon.com/support/amazonbot)" }
+    })
+    assert(pass_amz == false, "Amazonbot should be blocked under standard level")
+    assert(b_amz.reason == "ai_bot_blocked")
+
+    local pass_anth, b_anth = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Anthropic/1.0" }
+    })
+    assert(pass_anth == false, "Anthropic/1.0 should be blocked under standard level")
+    assert(b_anth.reason == "ai_bot_blocked")
+
+    -- 6. Case-insensitive and multi-value table header tests
+    local pass_pw, b_pw = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+            ["X-Playwright"] = "true"
+        }
+    })
+    assert(pass_pw == false, "Mixed-case X-Playwright should be blocked")
+    assert(b_pw.reason == "script_client_blocked")
+
+    -- Multi-value table header safety in OpenResty
+    local pass_table_hdr = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+            ["Accept-Language"] = { "en-US", "en;q=0.9" },
+            ["Accept-Encoding"] = { "gzip", "deflate" },
+            ["Sec-Ch-Ua-Platform"] = { [["Windows"]] }
+        }
+    })
+    assert(pass_table_hdr == true, "Multi-value table headers should be safely parsed without error")
     print("  ✓ bot_defense_level preset tests passed successfully")
 end
 

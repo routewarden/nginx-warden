@@ -1008,10 +1008,29 @@ local function detect_search_engine(ua)
     return nil
 end
 
+local function get_header_ci(headers, name)
+    if not headers or type(headers) ~= "table" then return nil end
+    local lower_name = string.lower(name)
+    local val = headers[lower_name]
+    if val == nil then
+        for k, v in pairs(headers) do
+            if type(k) == "string" and string.lower(k) == lower_name then
+                val = v
+                break
+            end
+        end
+    end
+    if val == nil then return nil end
+    if type(val) == "table" then
+        return val[1] and tostring(val[1]) or nil
+    end
+    return tostring(val)
+end
+
 local function is_ai_bot(ua)
     if not ua or ua == "" then return false end
     local lower_ua = string.lower(ua)
-    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
+    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
 end
 
 local function detect_browser_impersonation(ua, headers)
@@ -1031,18 +1050,18 @@ local function detect_browser_impersonation(ua, headers)
     end
 
     -- 1. Mandatory companion headers
-    local accept_lang = headers["accept-language"] or headers["Accept-Language"] or ""
+    local accept_lang = get_header_ci(headers, "accept-language") or ""
     if accept_lang == "" then
         return true, "missing_accept_language"
     end
 
-    local accept_enc = headers["accept-encoding"] or headers["Accept-Encoding"] or ""
+    local accept_enc = get_header_ci(headers, "accept-encoding") or ""
     if accept_enc == "" then
         return true, "missing_accept_encoding"
     end
 
     -- 2. Client Hints platform check
-    local sec_platform = headers["sec-ch-ua-platform"] or headers["Sec-CH-UA-Platform"] or ""
+    local sec_platform = get_header_ci(headers, "sec-ch-ua-platform") or ""
     if sec_platform ~= "" then
         local plat = string.lower(string.gsub(sec_platform, '"', ''))
         plat = string.match(plat, "^%s*(.-)%s*$")
@@ -1066,7 +1085,7 @@ local function detect_browser_impersonation(ua, headers)
     end
 
     -- 3. Client Hints mobile check
-    local sec_mobile_raw = headers["sec-ch-ua-mobile"] or headers["Sec-CH-UA-Mobile"] or ""
+    local sec_mobile_raw = get_header_ci(headers, "sec-ch-ua-mobile") or ""
     if sec_mobile_raw ~= "" then
         local sec_mobile = string.gsub(sec_mobile_raw, '[%s"?]', '')
         local claimed_mobile = lower_ua:find("mobile") ~= nil or lower_ua:find("iphone") ~= nil or lower_ua:find("ipod") ~= nil or lower_ua:find("android") ~= nil
@@ -1082,7 +1101,7 @@ local function detect_browser_impersonation(ua, headers)
     end
 
     -- 4. Client Hints brand check
-    local sec_ch_ua = headers["sec-ch-ua"] or headers["Sec-CH-UA"] or ""
+    local sec_ch_ua = get_header_ci(headers, "sec-ch-ua") or ""
     if sec_ch_ua ~= "" then
         local is_firefox = lower_ua:find("firefox") ~= nil
         local is_safari_only = lower_ua:find("safari") ~= nil and lower_ua:find("chrome") == nil and lower_ua:find("chromium") == nil and lower_ua:find("edg") == nil
@@ -1100,9 +1119,9 @@ local function detect_browser_impersonation(ua, headers)
                 return true, "missing_sec_ch_ua"
             end
             if ver_num >= 90 then
-                local fetch_site = headers["sec-fetch-site"] or headers["Sec-Fetch-Site"] or ""
-                local fetch_mode = headers["sec-fetch-mode"] or headers["Sec-Fetch-Mode"] or ""
-                local fetch_dest = headers["sec-fetch-dest"] or headers["Sec-Fetch-Dest"] or ""
+                local fetch_site = get_header_ci(headers, "sec-fetch-site") or ""
+                local fetch_mode = get_header_ci(headers, "sec-fetch-mode") or ""
+                local fetch_dest = get_header_ci(headers, "sec-fetch-dest") or ""
                 if fetch_site == "" and fetch_mode == "" and fetch_dest == "" then
                     return true, "missing_sec_fetch"
                 end
@@ -1117,12 +1136,12 @@ local function detect_browser_impersonation(ua, headers)
 end
 
 local function detect_script_client(ua, headers)
-    if headers["x-playwright"] or headers["X-Playwright"] then return true, "playwright_headless" end
-    if headers["x-puppeteer"] or headers["X-Puppeteer"] then return true, "puppeteer_headless" end
-    if headers["x-selenium"] or headers["X-Selenium"] then return true, "selenium_headless" end
-    if headers["x-scrapy"] or headers["X-Scrapy"] then return true, "scrapy_crawler" end
-    if headers["x-cypress"] or headers["X-Cypress"] then return true, "cypress_headless" end
-    if headers["sec-webdriver"] or headers["Sec-WebDriver"] or headers["x-headless"] or headers["X-Headless"] or headers["x-headless-chrome"] or headers["X-Headless-Chrome"] or headers["x-automation"] or headers["X-Automation"] then
+    if get_header_ci(headers, "x-playwright") then return true, "playwright_headless" end
+    if get_header_ci(headers, "x-puppeteer") then return true, "puppeteer_headless" end
+    if get_header_ci(headers, "x-selenium") then return true, "selenium_headless" end
+    if get_header_ci(headers, "x-scrapy") then return true, "scrapy_crawler" end
+    if get_header_ci(headers, "x-cypress") then return true, "cypress_headless" end
+    if get_header_ci(headers, "sec-webdriver") or get_header_ci(headers, "x-headless") or get_header_ci(headers, "x-headless-chrome") or get_header_ci(headers, "x-automation") then
         return true, "webdriver_automation"
     end
 
@@ -1367,7 +1386,7 @@ function _M:inspect(req_ctx)
         if not ua_blocked and block_ai then
             local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
             local lower_ua = string.lower(user_agent)
-            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot")
+            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot")
             local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
             local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot") or lower_ua:find("diffbot")
 
