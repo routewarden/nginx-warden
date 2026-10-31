@@ -452,6 +452,9 @@ local function normalize_json_config(raw)
     t.allowed_asns = raw.allowed_asns or raw.allowedASNs
     t.blocked_asns = raw.blocked_asns or raw.blockedASNs
     t.asn_db = raw.asn_db or raw.asnDB
+    if raw.bot_defense_level ~= nil then t.bot_defense_level = raw.bot_defense_level
+    elseif raw.botDefenseLevel ~= nil then t.bot_defense_level = raw.botDefenseLevel end
+
     if raw.block_ai_bots ~= nil then t.block_ai_bots = raw.block_ai_bots
     elseif raw.blockAIBots ~= nil then t.block_ai_bots = raw.blockAIBots end
 
@@ -538,6 +541,35 @@ local function normalize_json_config(raw)
     return t
 end
 
+local function apply_bot_defense_level(cfg, level)
+    if not level or type(level) ~= "string" then return end
+    local lvl = string.lower(string.match(level, "^%s*(.-)%s*$"))
+    if lvl == "light" or lvl == "relaxed" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "train_only"
+        cfg.block_script_clients = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "standard" or lvl == "moderate" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "train_only"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "strict" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "all"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "aggressive" or lvl == "paranoia" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "aggressive"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    end
+end
+
 -- Constructor for RouteWarden instance
 function _M.new(opts)
     local cfg = config.default_config()
@@ -571,6 +603,13 @@ function _M.new(opts)
 
     local function apply_opts(source)
         if not source or type(source) ~= "table" then return end
+
+        local bdl = source.bot_defense_level
+        if bdl == nil then bdl = source.botDefenseLevel end
+        if bdl ~= nil then
+            cfg.bot_defense_level = bdl
+            apply_bot_defense_level(cfg, bdl)
+        end
 
         if source.enabled ~= nil then cfg.enabled = source.enabled end
 
@@ -969,6 +1008,12 @@ local function detect_search_engine(ua)
     return nil
 end
 
+local function is_ai_bot(ua)
+    if not ua or ua == "" then return false end
+    local lower_ua = string.lower(ua)
+    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
+end
+
 local function detect_browser_impersonation(ua, headers)
     if not ua or ua == "" then return false, nil end
     local lower_ua = string.lower(ua)
@@ -977,6 +1022,11 @@ local function detect_browser_impersonation(ua, headers)
 
     -- Search engine exemption (e.g. Googlebot)
     if detect_search_engine(ua) then
+        return false, nil
+    end
+
+    -- Exclude recognized AI bots governed by AI bot registry profiles
+    if is_ai_bot(ua) then
         return false, nil
     end
 

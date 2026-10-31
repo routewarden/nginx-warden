@@ -1065,6 +1065,90 @@ do
     print("  ✓ Exported helper functions verified")
 end
 
+-- 51. bot_defense_level preset tests
+do
+    -- 1. Level: standard -> blocks GPTBot, python-requests, spoofed Chrome; allows search bot (PerplexityBot)
+    local rw_std = routewarden.new({ bot_defense_level = "standard" })
+    local pass_gpt, b_gpt = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt == false, "GPTBot should be blocked under standard level")
+    assert(b_gpt.reason == "ai_bot_blocked")
+
+    local pass_py, b_py = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "python-requests/2.31.0" }
+    })
+    assert(pass_py == false, "python-requests should be blocked under standard level")
+    assert(b_py.reason == "script_client_blocked")
+
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    local pass_spoofed, b_spoofed = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed == false, "spoofed Chrome should be blocked under standard level")
+    assert(b_spoofed.reason == "browser_spoofed")
+
+    local pass_perp = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp == true, "PerplexityBot should pass under standard level")
+
+    -- 2. Level: strict -> blocks search bot (PerplexityBot)
+    local rw_strict = routewarden.new({ bot_defense_level = "strict" })
+    local pass_perp_strict, b_perp_strict = rw_strict:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp_strict == false, "PerplexityBot should be blocked under strict level")
+    assert(b_perp_strict.reason == "ai_bot_blocked")
+
+    -- 3. Level: light -> allows spoofed Chrome, blocks python-requests
+    local rw_light = routewarden.new({ bot_defense_level = "light" })
+    local pass_spoofed_light = rw_light:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed_light == true, "spoofed Chrome should pass under light level")
+
+    local pass_py_light, b_py_light = rw_light:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "python-requests/2.31.0" }
+    })
+    assert(pass_py_light == false, "python-requests should be blocked under light level")
+    assert(b_py_light.reason == "script_client_blocked")
+
+    -- 4. Level: standard with explicit override detect_browser_impersonation = false
+    local rw_override = routewarden.new({
+        bot_defense_level = "standard",
+        detect_browser_impersonation = false
+    })
+    local pass_spoofed_override = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed_override == true, "spoofed Chrome should pass with explicit override")
+
+    local pass_gpt_override = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt_override == false, "GPTBot should be blocked with standard level in override")
+    print("  ✓ bot_defense_level preset tests passed successfully")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

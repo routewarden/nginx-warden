@@ -76,6 +76,7 @@ function _M.default_config()
         blocked_asns = {},
         asn_db = nil,
         trusted_proxies = {},
+        bot_defense_level = nil,
         block_ai_bots = false,
         ai_bot_profile = "train_only",
         block_user_agents = {},
