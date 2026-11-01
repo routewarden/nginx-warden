@@ -1010,6 +1010,27 @@ local function detect_search_engine(ua)
     if lower:find("applebot") then
         return "apple"
     end
+    if lower:find("yandexbot") or lower:find("yandeximages") or lower:find("yandexaccessibilitybot") or lower:find("yandexmobilebot") or lower:find("yandexdirect") or lower:find("yandexmetrika") then
+        return "yandex"
+    end
+    if lower:find("baiduspider") then
+        return "baidu"
+    end
+    if lower:find("duckduckbot") then
+        return "duckduckgo"
+    end
+    if (lower:find("yahoo") and lower:find("slurp")) or lower:find("slurp") then
+        return "yahoo"
+    end
+    if lower:find("yeti") then
+        return "naver"
+    end
+    if lower:find("sogou") and lower:find("spider") then
+        return "sogou"
+    end
+    if lower:find("mojeekbot") then
+        return "mojeek"
+    end
     return nil
 end
 
@@ -1035,7 +1056,7 @@ end
 local function is_ai_bot(ua)
     if not ua or ua == "" then return false end
     local lower_ua = string.lower(ua)
-    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
+    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("cohere%-ai") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("mistralbot") or lower_ua:find("deepseekbot") or lower_ua:find("exabot") or lower_ua:find("metaphorbot") or lower_ua:find("cotalker") or lower_ua:find("petalbot") or lower_ua:find("perplexitybot") or lower_ua:find("perplexity%-search") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user") or lower_ua:find("grokbot") or lower_ua:find("twitterbot") or lower_ua:find("duckassistbot") or lower_ua:find("bingpreview") or lower_ua:find("firecrawl") or lower_ua:find("apify") or lower_ua:find("zyte") or lower_ua:find("brightdata") or lower_ua:find("crawlbase") or lower_ua:find("scrapingbee") or lower_ua:find("octoparse") or lower_ua:find("autogpt") or lower_ua:find("langchain") or lower_ua:find("llamaindex") or lower_ua:find("agentgpt")
 end
 
 local function detect_browser_impersonation(ua, headers)
@@ -1188,6 +1209,20 @@ local function is_valid_host_for_engine(host, engine)
         return string.find(h, "%.search%.msn%.com$") ~= nil or h == "search.msn.com"
     elseif engine == "apple" then
         return string.find(h, "%.applebot%.apple%.com$") ~= nil or h == "applebot.apple.com"
+    elseif engine == "yandex" then
+        return string.find(h, "%.yandex%.ru$") ~= nil or string.find(h, "%.yandex%.net$") ~= nil or string.find(h, "%.yandex%.com$") ~= nil or h == "yandex.ru" or h == "yandex.net" or h == "yandex.com"
+    elseif engine == "baidu" then
+        return string.find(h, "%.baidu%.com$") ~= nil or string.find(h, "%.baidu%.jp$") ~= nil or h == "baidu.com" or h == "baidu.jp"
+    elseif engine == "duckduckgo" then
+        return string.find(h, "%.duckduckgo%.com$") ~= nil or h == "duckduckgo.com"
+    elseif engine == "yahoo" then
+        return string.find(h, "%.crawl%.yahoo%.net$") ~= nil or h == "crawl.yahoo.net"
+    elseif engine == "naver" then
+        return string.find(h, "%.naver%.com$") ~= nil or h == "naver.com"
+    elseif engine == "sogou" then
+        return string.find(h, "%.sogou%.com$") ~= nil or h == "sogou.com"
+    elseif engine == "mojeek" then
+        return string.find(h, "%.mojeek%.com$") ~= nil or h == "mojeek.com"
     end
     return false
 end
@@ -1403,9 +1438,10 @@ function _M:inspect(req_ctx)
         if not ua_blocked and block_ai and user_agent ~= "" then
             local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
             local lower_ua = string.lower(user_agent)
-            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot")
-            local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user")
-            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot") or lower_ua:find("diffbot")
+            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("cohere%-ai") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("mistralbot") or lower_ua:find("deepseekbot") or lower_ua:find("exabot") or lower_ua:find("metaphorbot") or lower_ua:find("cotalker") or lower_ua:find("petalbot")
+            local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("perplexity%-search") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user") or lower_ua:find("grokbot") or lower_ua:find("twitterbot") or lower_ua:find("duckassistbot") or lower_ua:find("bingpreview")
+            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot") or lower_ua:find("diffbot") or lower_ua:find("petalbot")
+            local is_agent_bot = lower_ua:find("firecrawl") or lower_ua:find("apify") or lower_ua:find("zyte") or lower_ua:find("brightdata") or lower_ua:find("crawlbase") or lower_ua:find("scrapingbee") or lower_ua:find("octoparse") or lower_ua:find("autogpt") or lower_ua:find("langchain") or lower_ua:find("llamaindex") or lower_ua:find("agentgpt")
 
             if profile == "all" then
                 if is_train_bot then
@@ -1414,14 +1450,28 @@ function _M:inspect(req_ctx)
                     ua_blocked = true; ua_pattern = "ai_search_bot"; ua_reason = "ai_bot_blocked"
                 elseif is_aggr_bot then
                     ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
                 end
             elseif profile == "aggressive" then
                 if is_aggr_bot then
                     ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
                 end
             elseif profile == "train_only" then
                 if is_train_bot then
                     ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "search_only" then
+                if is_search_bot then
+                    ua_blocked = true; ua_pattern = "ai_search_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "agents_only" then
+                if is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
                 end
             end
         end

@@ -805,6 +805,73 @@ do
     })
     assert(pass_perp == true, "PerplexityBot must be allowed under train_only profile")
 
+    -- Test new 2026 crawlers under train_only: MistralBot, DeepSeekBot
+    local pass_mistral, b_mistral = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "MistralBot/1.0" }
+    })
+    assert(pass_mistral == false, "MistralBot must be blocked under train_only")
+    assert(b_mistral.pattern == "ai_training_bot")
+
+    local pass_deepseek, b_deepseek = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; DeepSeekBot/1.0; +https://www.deepseek.com)" }
+    })
+    assert(pass_deepseek == false, "DeepSeekBot must be blocked under train_only")
+    assert(b_deepseek.pattern == "ai_training_bot")
+
+    -- Test 'search_only' profile
+    local rw_search = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "search_only",
+        security_log = false
+    })
+    local pass_search_perp, b_search_perp = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_search_perp == false, "PerplexityBot must be blocked under search_only")
+    assert(b_search_perp.pattern == "ai_search_bot")
+
+    local pass_search_grok, b_search_grok = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GrokBot/1.0)" }
+    })
+    assert(pass_search_grok == false, "GrokBot must be blocked under search_only")
+    assert(b_search_grok.pattern == "ai_search_bot")
+
+    local pass_search_gpt = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_search_gpt == true, "GPTBot must be allowed under search_only")
+
+    -- Test 'agents_only' profile
+    local rw_agents = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "agents_only",
+        security_log = false
+    })
+    local pass_agents_firecrawl, b_agents_firecrawl = rw_agents:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Firecrawl/1.0 (+https://firecrawl.dev)" }
+    })
+    assert(pass_agents_firecrawl == false, "Firecrawl must be blocked under agents_only")
+    assert(b_agents_firecrawl.pattern == "ai_agent_bot")
+
+    local pass_agents_gpt = rw_agents:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_agents_gpt == true, "GPTBot must be allowed under agents_only")
+
     -- Test 'all' profile
     local rw_all = routewarden.new({
         block_ai_bots = true,
@@ -1189,6 +1256,13 @@ do
     assert(routewarden.detect_search_engine("Googlebot/2.1") == "google")
     assert(routewarden.detect_search_engine("bingbot/2.0") == "bing")
     assert(routewarden.detect_search_engine("Applebot/0.1") == "apple")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)") == "yandex")
+    assert(routewarden.detect_search_engine("Baiduspider+(+http://www.baidu.com/search/spider.htm)") == "baidu")
+    assert(routewarden.detect_search_engine("DuckDuckBot/1.1; (+http://duckduckgo.com/duckduckbot.html)") == "duckduckgo")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)") == "yahoo")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; Yeti/1.1; +http://naver.me/bot)") == "naver")
+    assert(routewarden.detect_search_engine("Sogou web spider/4.0(+http://www.sogou.com/docs/help/websearchhtm)") == "sogou")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; MojeekBot/0.11; http://www.mojeek.com/bot.html)") == "mojeek")
     assert(routewarden.detect_search_engine("curl/7.68.0") == nil)
 
     local is_script, name = routewarden.detect_script_client("python-requests/2.28.0", {})
