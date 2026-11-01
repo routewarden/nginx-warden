@@ -972,6 +972,36 @@ do
     assert(pass_no_slash == false, "trap path configured without leading slash must trigger")
     assert(b_no_slash.reason == "honeypot_trap_triggered")
 
+    -- 9. Case-insensitive matching: uppercase/mixed-case requests must trigger trap
+    local pass_case1, b_case1 = rw_trap:inspect({
+        method = "GET",
+        uri = "/HIDDEN-SPIDER-TRAP",
+        remote_addr = "198.51.100.96"
+    })
+    assert(pass_case1 == false, "uppercase /HIDDEN-SPIDER-TRAP must trigger trap")
+    assert(b_case1.reason == "honeypot_trap_triggered")
+
+    local pass_case2, b_case2 = rw_trap:inspect({
+        method = "GET",
+        uri = "/Crawler-Trap/Deep/Link",
+        remote_addr = "198.51.100.97"
+    })
+    assert(pass_case2 == false, "mixed-case /Crawler-Trap/Deep/Link must trigger trap")
+    assert(b_case2.reason == "honeypot_trap_triggered")
+
+    -- 10. Root honeypot trap safeguard: "/" must be ignored and not block root
+    local rw_root = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "/", "   " },
+        trap_ban_duration = "1h"
+    })
+    local pass_root, _ = rw_root:inspect({
+        method = "GET",
+        uri = "/",
+        remote_addr = "198.51.100.98"
+    })
+    assert(pass_root == true, "root request must pass through when honeypot_trap_paths contains '/'")
+
     print("  ✓ Honeypot spider traps and in-memory ban table verified")
 end
 

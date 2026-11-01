@@ -1484,12 +1484,17 @@ function _M:inspect(req_ctx)
                         clean_trap = "/" .. clean_trap
                     end
                     local base_trap = string.gsub(clean_trap, "/+$", "")
-                    local prefix_trap = base_trap .. "/"
-                    if path_cand == base_trap or path_cand == clean_trap or (base_trap ~= "" and string.sub(path_cand, 1, #prefix_trap) == prefix_trap) then
-                        trap_triggered = true
-                        matched_trap = clean_trap
-                        matched_path = path_cand
-                        break
+                    if base_trap ~= "" then
+                        local prefix_trap = base_trap .. "/"
+                        local lower_cand = string.lower(path_cand)
+                        local lower_base = string.lower(base_trap)
+                        local lower_prefix = string.lower(prefix_trap)
+                        if lower_cand == lower_base or string.sub(lower_cand, 1, #lower_prefix) == lower_prefix then
+                            trap_triggered = true
+                            matched_trap = clean_trap
+                            matched_path = path_cand
+                            break
+                        end
                     end
                 end
             end
