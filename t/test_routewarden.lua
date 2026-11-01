@@ -177,11 +177,31 @@ do
     assert(passed == false)
     assert(logged_payload ~= nil, "Security log event should be emitted")
     assert(logged_payload.type == "routewarden_block")
+    assert(logged_payload.verdict == "BLOCK", "default json block verdict should be BLOCK")
     assert(logged_payload.plugin == "nginx-warden")
     assert(logged_payload.client_ip == "198.51.100.25")
     assert(logged_payload.user_agent == "ScannerBot/1.0")
     assert(logged_payload.action == "json")
-    print("  ✓ CrowdSec-compatible security log event emitted")
+
+    -- Test tarpit verdict mapping
+    local rw_tarpit = routewarden.new({ response = { mode = "tarpit" } })
+    rw_tarpit:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_tarpit, "GET", "/.env")
+    assert(logged_payload.verdict == "TARPIT", "tarpit mode verdict should be TARPIT")
+
+    -- Test markov_tarpit verdict mapping
+    local rw_markov = routewarden.new({ response = { mode = "markov_tarpit" } })
+    rw_markov:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_markov, "GET", "/.env")
+    assert(logged_payload.verdict == "TARPIT", "markov_tarpit mode verdict should be TARPIT")
+
+    -- Test captcha challenge verdict mapping
+    local rw_captcha = routewarden.new({ response = { mode = "captcha" } })
+    rw_captcha:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_captcha, "GET", "/.env")
+    assert(logged_payload.verdict == "CHALLENGE", "captcha mode verdict should be CHALLENGE")
+
+    print("  ✓ CrowdSec-compatible security log event emitted with verdict")
 end
 
 -- 13. Disabled module bypass
@@ -201,7 +221,12 @@ do
         "/Dockerfile",
         "/docker-compose.yml",
         "/.DS_Store",
-        "/wp-config.php"
+        "/wp-config.php",
+        "/wp-config.php::$DATA",
+        "/settings.py.",
+        "/server.key%20",
+        "/database.sqlite3::$data",
+        "/sub./.env"
     }
     for _, p in ipairs(sensitive_paths) do
         local passed = simulate_request(rw, "GET", p)
@@ -728,7 +753,24 @@ do
     })
     assert(passed == false, "query string with sensitive key .env must be blocked")
     assert(block_info.reason == "query_blocked", "reason must be query_blocked")
-    print("  ✓ sensitive query parameter keys blocked when check_query enabled")
+
+    local passed_semi, block_semi = rw:inspect({
+        method = "GET",
+        uri = "/search",
+        raw_uri = "/search?safe=1;file=.env",
+        query_string = "safe=1;file=.env"
+    })
+    assert(passed_semi == false, "query string with semicolon delimiter must be blocked")
+
+    local passed_enc, block_enc = rw:inspect({
+        method = "GET",
+        uri = "/search",
+        raw_uri = "/search?safe=1%26file=.env",
+        query_string = "safe=1%26file=.env"
+    })
+    assert(passed_enc == false, "query string with encoded ampersand must be blocked")
+
+    print("  ✓ sensitive query parameter keys and encoded delimiters blocked when check_query enabled")
 end
 
 -- 46. AI Bot and User-Agent Blocking
@@ -861,6 +903,15 @@ do
     assert(pass_banned == false, "subsequent request must be blocked by active ban table")
     assert(b_banned.reason == "ip_banned", "reason must be ip_banned")
 
+    -- 3b. Subsequent request via dual-stack IPv4-mapped IPv6 with port is also blocked
+    local pass_mapped, b_mapped = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = "[::ffff:" .. client_ip .. "]:45678"
+    })
+    assert(pass_mapped == false, "subsequent request via IPv4-mapped IPv6 must be blocked by ban table")
+    assert(b_mapped.reason == "ip_banned", "reason must be ip_banned for IPv4-mapped IPv6")
+
     -- 4. Different IP is not banned
     local pass_other, _ = rw_trap:inspect({
         method = "GET",
@@ -868,6 +919,59 @@ do
         remote_addr = other_ip
     })
     assert(pass_other == true, "unbanned client IP must pass")
+
+    -- 5. Subpath of trap without trailing slash (/hidden-spider-trap/deep/link) triggers trap
+    local client_sub = "198.51.100.88"
+    local pass_sub, b_sub = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap/deep/link",
+        remote_addr = client_sub
+    })
+    assert(pass_sub == false, "subpath trap hit must be blocked")
+    assert(b_sub.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered for subpath")
+
+    -- 6. Non-trap prefix collision path (/hidden-spider-trapdoor) must pass
+    local client_prefix = "198.51.100.89"
+    local pass_prefix, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trapdoor",
+        remote_addr = client_prefix
+    })
+    assert(pass_prefix == true, "prefix-collision path /hidden-spider-trapdoor must pass")
+
+    -- 7. Bracketed IPv6 honeypot ban normalization
+    local client_ipv6 = "[2001:db8::99]"
+    local pass_v6_trap, b_v6_trap = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap",
+        remote_addr = client_ipv6
+    })
+    assert(pass_v6_trap == false, "bracketed IPv6 trap hit must trigger")
+    assert(b_v6_trap.reason == "honeypot_trap_triggered")
+
+    -- Subsequent request from unbracketed IPv6 must be banned
+    local pass_v6_banned, b_v6_banned = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = "2001:db8::99"
+    })
+    assert(pass_v6_banned == false, "subsequent request from unbracketed IPv6 must be banned")
+    assert(b_v6_banned.reason == "ip_banned")
+
+    -- 8. Honeypot trap configured WITHOUT leading slash (e.g. "no-slash-trap")
+    local rw_no_slash = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "no-slash-trap" },
+        trap_ban_duration = "1h"
+    })
+    local pass_no_slash, b_no_slash = rw_no_slash:inspect({
+        method = "GET",
+        uri = "/no-slash-trap",
+        remote_addr = "198.51.100.95"
+    })
+    assert(pass_no_slash == false, "trap path configured without leading slash must trigger")
+    assert(b_no_slash.reason == "honeypot_trap_triggered")
+
     print("  ✓ Honeypot spider traps and in-memory ban table verified")
 end
 
@@ -1188,7 +1292,159 @@ do
         }
     })
     assert(pass_table_hdr == true, "Multi-value table headers should be safely parsed without error")
+
+    -- 7. Automated client with empty User-Agent and X-Playwright
+    local pass_empty_pw, b_empty_pw = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["X-Playwright"] = "true"
+        }
+    })
+    assert(pass_empty_pw == false, "Empty UA with X-Playwright must be blocked")
+    assert(b_empty_pw.reason == "script_client_blocked")
+
+    -- 8. Custom block_user_agents with ^$ matching empty User-Agent
+    local rw_empty_ua = routewarden.new({
+        enable_default_patterns = false,
+        block_user_agents = { "^$" }
+    })
+    local pass_empty_ua, b_empty_ua = rw_empty_ua:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {}
+    })
+    assert(pass_empty_ua == false, "Empty User-Agent must be blocked when ^$ is configured")
+    assert(b_empty_ua.reason == "user_agent_blocked")
     print("  ✓ bot_defense_level preset tests passed successfully")
+end
+
+-- 51. check_body form & JSON unpacking with end-anchored patterns
+do
+    local rw_body = routewarden.new({
+        enable_default_patterns = false,
+        methods = { "POST" },
+        check_body = true,
+        block_patterns = { "(?i)%.key$" }
+    })
+
+    -- 1. Raw form string where payload contains .key in the middle:
+    -- "other=1&cert=server.key&final=ok"
+    local pass_form, b_form = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = "other=1&cert=server.key&final=ok"
+    })
+    assert(pass_form == false, "form parameter server.key must be extracted and blocked by end-anchored pattern")
+    assert(b_form.reason == "body_blocked")
+
+    -- 2. JSON payload where .key is a nested string value
+    local pass_json, b_json = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"config": {"private_key": "id_rsa.key"}, "status": "active"}'
+    })
+    assert(pass_json == false, "JSON nested string id_rsa.key must be extracted and blocked by end-anchored pattern")
+    assert(b_json.reason == "body_blocked")
+
+    -- 3. JSON payload with array of values
+    local pass_json_arr, b_json_arr = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"files": ["readme.txt", "secret.key"]}'
+    })
+    assert(pass_json_arr == false, "JSON array element secret.key must be extracted and blocked")
+    assert(b_json_arr.reason == "body_blocked")
+
+    -- 4. Clean body payload should pass
+    local pass_clean, _ = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"files": ["readme.txt", "document.pdf"]}'
+    })
+    assert(pass_clean == true, "Clean JSON payload must pass")
+    print("  ✓ check_body form & JSON unpacking verified")
+
+    -- 5. Trailing slash matching test
+    local rw_trailing = routewarden.new({
+        enable_default_patterns = false,
+        block_patterns = { "(?i)^/admin/$" }
+    })
+    local p1, r1 = rw_trailing:inspect({ method = "GET", uri = "/admin/" })
+    assert(p1 == false and r1.reason == "path_blocked", "Expected /admin/ to be blocked by ^/admin/$")
+    local p2, r2 = rw_trailing:inspect({ method = "GET", uri = "/admin" })
+    assert(p2 == false and r2.reason == "path_blocked", "Expected /admin to be blocked by ^/admin/$ (candidate trailing slash)")
+    local p3, _ = rw_trailing:inspect({ method = "GET", uri = "/admin/users" })
+    assert(p3 == true, "Expected /admin/users to pass")
+    print("  ✓ trailing slash candidate path matching verified")
+
+    -- 6. Check headers whitespace and quotes unquoting
+    local rw_hdr_quotes = routewarden.new({
+        enable_default_patterns = true,
+        check_headers = { "X-Forwarded-Prefix", "X-Rewrite-URL" }
+    })
+    local hp1, hr1 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = "  /.env  " }
+    })
+    assert(hp1 == false and hr1.reason == "header_blocked", "Expected header with whitespace to be blocked")
+
+    local hp2, hr2 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '"/wp-config.php"' }
+    })
+    assert(hp2 == false and hr2.reason == "header_blocked", "Expected double-quoted header to be blocked")
+
+    local hp3, hr3 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-rewrite-url"] = "'/.env'" }
+    })
+    assert(hp3 == false and hr3.reason == "header_blocked", "Expected single-quoted header to be blocked")
+
+    local hp4, hr4 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '" /safe ", " /.env "' }
+    })
+    assert(hp4 == false and hr4.reason == "header_blocked", "Expected comma-separated quoted header to be blocked")
+
+    local hp5, _ = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '"/dashboard"' }
+    })
+    assert(hp5 == true, "Expected safe header to pass")
+    print("  ✓ check_headers whitespace and quote unquoting verified")
+
+    -- 7. Encoded delimiters and whitespace evasion tests
+    local rw_delims = routewarden.new({
+        enable_default_patterns = true
+    })
+
+    local dp1, dr1 = rw_delims:inspect({ method = "GET", uri = "/backup.sql%3fparam=value" })
+    assert(dp1 == false and dr1.reason == "path_blocked", "Expected /backup.sql%3fparam=value to be blocked")
+
+    local dp2, dr2 = rw_delims:inspect({ method = "GET", uri = "/database.sql%23section" })
+    assert(dp2 == false and dr2.reason == "path_blocked", "Expected /database.sql%23section to be blocked")
+
+    local dp3, dr3 = rw_delims:inspect({ method = "GET", uri = "/server.key%3ffoo%23bar" })
+    assert(dp3 == false and dr3.reason == "path_blocked", "Expected /server.key%3ffoo%23bar to be blocked")
+
+    local dp4, dr4 = rw_delims:inspect({ method = "GET", uri = "/.env%0d" })
+    assert(dp4 == false and dr4.reason == "path_blocked", "Expected /.env%0d to be blocked")
+
+    local dp5, dr5 = rw_delims:inspect({ method = "GET", uri = "/.env%0a" })
+    assert(dp5 == false and dr5.reason == "path_blocked", "Expected /.env%0a to be blocked")
+
+    local dp6, dr6 = rw_delims:inspect({ method = "GET", uri = "/.env%09" })
+    assert(dp6 == false and dr6.reason == "path_blocked", "Expected /.env%09 to be blocked")
+
+    local dp7, _ = rw_delims:inspect({ method = "GET", uri = "/index.html" })
+    assert(dp7 == true, "Expected clean request /index.html to pass")
+    print("  ✓ encoded delimiters (%3f, %23) and whitespace (%0d, %0a, %09) evasion verified")
 end
 
 print("All routewarden integration tests passed successfully!")

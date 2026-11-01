@@ -928,8 +928,13 @@ local function normalize_ip(ip)
     local clean = string.match(ip, "^%s*(.-)%s*$")
     local ipv4 = string.match(clean, "^(%d+%.%d+%.%d+%.%d+):%d+$")
     if ipv4 then return ipv4 end
-    local ipv6 = string.match(clean, "^%[([%a%d:]+)%]:%d+$")
-    if ipv6 then return ipv6 end
+    local ipv6 = string.match(clean, "^%[([%a%d%.:]+)%]:%d+$")
+    if ipv6 then clean = ipv6 end
+    if string.sub(clean, 1, 1) == "[" and string.sub(clean, -1) == "]" then
+        clean = string.sub(clean, 2, -2)
+    end
+    local v4_mapped = string.match(clean, "^::[fF][fF][fF][fF]:(%d+%.%d+%.%d+%.%d+)$")
+    if v4_mapped then return v4_mapped end
     return clean
 end
 
@@ -1302,30 +1307,42 @@ function _M:inspect(req_ctx)
 
     -- Stage 1c: Active Ban Table Check
     local norm_ip = normalize_ip(client_ip)
-    if self.ban_table and self.ban_table[norm_ip] then
+    local is_banned = false
+    local shared_bans = (ngx and ngx.shared and ngx.shared.routewarden_bans) or nil
+    if shared_bans then
+        local banned_until = shared_bans:get(norm_ip)
+        if banned_until and (type(banned_until) ~= "number" or banned_until > os.time()) then
+            is_banned = true
+        end
+    end
+    if not is_banned and self.ban_table and self.ban_table[norm_ip] then
         if self.ban_table[norm_ip] > os.time() then
-            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
-            local block_info = {
-                blocked = true,
-                status_code = self.config.status_code or 403,
-                reason = "ip_banned",
-                pattern = "ban_table",
-                matched_pattern = "ban_table",
-                target = client_ip,
-                client_ip = client_ip,
-                method = method,
-                path = client_ip,
-                request_uri = req_ctx.raw_uri or "",
-                action = self.config.response and self.config.response.mode or "json",
-                user_agent = user_agent
-            }
-            if self.config.security_log ~= false then
-                logger.log_security_event(block_info, true, self.custom_log_sink)
-            end
-            return false, block_info
+            is_banned = true
         else
             self.ban_table[norm_ip] = nil
         end
+    end
+
+    if is_banned then
+        local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+        local block_info = {
+            blocked = true,
+            status_code = self.config.status_code or 403,
+            reason = "ip_banned",
+            pattern = "ban_table",
+            matched_pattern = "ban_table",
+            target = client_ip,
+            client_ip = client_ip,
+            method = method,
+            path = client_ip,
+            request_uri = req_ctx.raw_uri or "",
+            action = self.config.response and self.config.response.mode or "json",
+            user_agent = user_agent
+        }
+        if self.config.security_log ~= false then
+            logger.log_security_event(block_info, true, self.custom_log_sink)
+        end
+        return false, block_info
     end
 
     -- Stage 1d: User-Agent & AI Bot Inspection
@@ -1367,7 +1384,7 @@ function _M:inspect(req_ctx)
         end
     end
 
-    if not ua_allowed and user_agent ~= "" then
+    if not ua_allowed then
         local ua_blocked = false
         local ua_pattern = ""
         local ua_reason = ""
@@ -1383,7 +1400,7 @@ function _M:inspect(req_ctx)
 
         local block_ai = self.config.block_ai_bots
         if block_ai == nil then block_ai = self.config.blockAIBots end
-        if not ua_blocked and block_ai then
+        if not ua_blocked and block_ai and user_agent ~= "" then
             local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
             local lower_ua = string.lower(user_agent)
             local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot")
@@ -1409,7 +1426,7 @@ function _M:inspect(req_ctx)
             end
         end
 
-        if not ua_blocked and self.config.detect_browser_impersonation then
+        if not ua_blocked and self.config.detect_browser_impersonation and user_agent ~= "" then
             local is_spoofed, reason = detect_browser_impersonation(user_agent, headers)
             if is_spoofed then
                 ua_blocked = true
@@ -1463,7 +1480,12 @@ function _M:inspect(req_ctx)
             for _, trap_path in ipairs(self.config.honeypot_trap_paths) do
                 local clean_trap = string.match(trap_path, "^%s*(.-)%s*$")
                 if clean_trap ~= "" then
-                    if path_cand == clean_trap or (string.sub(clean_trap, -1) == "/" and string.sub(path_cand, 1, #clean_trap) == clean_trap) then
+                    if string.sub(clean_trap, 1, 1) ~= "/" then
+                        clean_trap = "/" .. clean_trap
+                    end
+                    local base_trap = string.gsub(clean_trap, "/+$", "")
+                    local prefix_trap = base_trap .. "/"
+                    if path_cand == base_trap or path_cand == clean_trap or (base_trap ~= "" and string.sub(path_cand, 1, #prefix_trap) == prefix_trap) then
                         trap_triggered = true
                         matched_trap = clean_trap
                         matched_path = path_cand
@@ -1475,8 +1497,13 @@ function _M:inspect(req_ctx)
         end
 
         if trap_triggered then
+            local ban_until = os.time() + self.parsed_ban_duration
             if self.ban_table then
-                self.ban_table[norm_ip] = os.time() + self.parsed_ban_duration
+                self.ban_table[norm_ip] = ban_until
+            end
+            local shared_bans = (ngx and ngx.shared and ngx.shared.routewarden_bans) or nil
+            if shared_bans then
+                shared_bans:set(norm_ip, ban_until, self.parsed_ban_duration)
             end
             local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
             local block_info = {
@@ -1561,33 +1588,48 @@ function _M:inspect(req_ctx)
 
             for _, raw_v in ipairs(raw_vals) do
                 local val_str = tostring(raw_v)
-                if val_str ~= "" then
-                    local header_candidates = { val_str }
-                    for _, hc in ipairs(normalizer.extract_candidate_paths(val_str, val_str, val_str)) do
-                        table.insert(header_candidates, hc)
+                local trimmed_val = string.match(val_str, "^%s*(.-)%s*$")
+                if trimmed_val and trimmed_val ~= "" then
+                    local header_vals = { trimmed_val }
+                    local unquoted = string.match(trimmed_val, '^["\'](.-)["\']$')
+                    if unquoted and unquoted ~= "" and unquoted ~= trimmed_val then
+                        local trimmed_unquoted = string.match(unquoted, "^%s*(.-)%s*$")
+                        if trimmed_unquoted ~= "" then
+                            table.insert(header_vals, trimmed_unquoted)
+                        end
                     end
                     -- Also handle comma-separated values in headers
-                    if string.find(val_str, ",", 1, true) then
-                        for part in string.gmatch(val_str, "[^,]+") do
+                    if string.find(trimmed_val, ",", 1, true) then
+                        for part in string.gmatch(trimmed_val, "[^,]+") do
                             local trimmed_part = string.match(part, "^%s*(.-)%s*$")
-                            if trimmed_part ~= "" and trimmed_part ~= val_str then
-                                table.insert(header_candidates, trimmed_part)
-                                for _, hc in ipairs(normalizer.extract_candidate_paths(trimmed_part, trimmed_part, trimmed_part)) do
-                                    table.insert(header_candidates, hc)
+                            if trimmed_part and trimmed_part ~= "" then
+                                local unq_part = string.match(trimmed_part, '^["\'](.-)["\']$')
+                                if unq_part and unq_part ~= "" then
+                                    trimmed_part = string.match(unq_part, "^%s*(.-)%s*$")
+                                end
+                                if trimmed_part ~= "" then
+                                    table.insert(header_vals, trimmed_part)
                                 end
                             end
                         end
                     end
 
-                    for _, hc in ipairs(header_candidates) do
-                        for _, block_re in ipairs(self.compiled_block) do
-                            if block_re:match(hc) then
-                                is_blocked = true
-                                blocked_pattern = block_re.pattern
-                                blocked_target = val_str
-                                blocked_reason = "header_blocked"
-                                break
+                    for _, hv in ipairs(header_vals) do
+                        local header_candidates = { hv }
+                        for _, hc in ipairs(normalizer.extract_candidate_paths(hv, hv, hv)) do
+                            table.insert(header_candidates, hc)
+                        end
+                        for _, hc in ipairs(header_candidates) do
+                            for _, block_re in ipairs(self.compiled_block) do
+                                if block_re:match(hc) then
+                                    is_blocked = true
+                                    blocked_pattern = block_re.pattern
+                                    blocked_target = val_str
+                                    blocked_reason = "header_blocked"
+                                    break
+                                end
                             end
+                            if is_blocked then break end
                         end
                         if is_blocked then break end
                     end
@@ -1628,6 +1670,44 @@ function _M:inspect(req_ctx)
             local body_candidates = { body_data }
             if unescaped_body and unescaped_body ~= body_data then
                 table.insert(body_candidates, unescaped_body)
+            end
+
+            -- Form urlencoded parameters extraction (&, ;)
+            local query_cands = normalizer.extract_query_candidates(body_data)
+            if query_cands and #query_cands > 0 then
+                for _, qc in ipairs(query_cands) do
+                    table.insert(body_candidates, qc)
+                end
+            end
+
+            -- JSON payload extraction
+            local trimmed_body = string.match(body_data, "^%s*(.-)%s*$")
+            if trimmed_body and ((string.sub(trimmed_body, 1, 1) == "{" and string.sub(trimmed_body, -1) == "}") or
+               (string.sub(trimmed_body, 1, 1) == "[" and string.sub(trimmed_body, -1) == "]")) then
+                local json_data, _ = parse_json(trimmed_body)
+                if json_data and type(json_data) == "table" then
+                    local function extract_json(val)
+                        if type(val) == "string" then
+                            table.insert(body_candidates, val)
+                            local cands = normalizer.extract_candidate_paths(val, val, val)
+                            for _, c in ipairs(cands) do
+                                table.insert(body_candidates, c)
+                            end
+                        elseif type(val) == "table" then
+                            for k, v in pairs(val) do
+                                if type(k) == "string" then
+                                    table.insert(body_candidates, k)
+                                    local cands = normalizer.extract_candidate_paths(k, k, k)
+                                    for _, c in ipairs(cands) do
+                                        table.insert(body_candidates, c)
+                                    end
+                                end
+                                extract_json(v)
+                            end
+                        end
+                    end
+                    extract_json(json_data)
+                end
             end
 
             local patterns_to_check = self.compiled_body

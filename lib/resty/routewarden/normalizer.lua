@@ -92,6 +92,20 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
         end
     end
 
+    -- 1a. Extract path from absolute URIs (e.g. http://example.com/path, http://example.com\path)
+    for _, initial in ipairs({ path_str, raw_uri_path, raw_path }) do
+        if initial and initial ~= "" then
+            local scheme_idx = string.find(initial, "://", 1, true)
+            if scheme_idx then
+                local rest = string.sub(initial, scheme_idx + 3)
+                local slash_idx = string.find(rest, "[/\\]")
+                if slash_idx then
+                    table.insert(paths_to_check, _M.clean_path(string.sub(rest, slash_idx)))
+                end
+            end
+        end
+    end
+
     -- 2. Add RawPath if specified and different (stripping query if leaked)
     if raw_path and raw_path ~= "" then
         local raw_path_clean = strip_query(raw_path)
@@ -100,14 +114,20 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
         end
     end
 
-    -- 3. Perform iterative unescaping (up to 3 times) to prevent multi-layer URL encoding evasion (%252e%252e)
+    -- 3. Perform iterative unescaping (up to 5 times) to prevent multi-layer URL encoding evasion (%25252e%25252e)
     local to_unescape = { base_path }
     if raw_uri_path and raw_uri_path ~= "" and raw_uri_path ~= base_path then
         table.insert(to_unescape, raw_uri_path)
     end
+    if raw_path and raw_path ~= "" and raw_path ~= base_path then
+        local raw_clean = strip_query(raw_path)
+        if raw_clean ~= "" and raw_clean ~= base_path and raw_clean ~= raw_uri_path then
+            table.insert(to_unescape, raw_clean)
+        end
+    end
     for _, initial in ipairs(to_unescape) do
         local cur_path = initial
-        for _ = 1, 3 do
+        for _ = 1, 5 do
             local unescaped = unescape_percent(cur_path)
             if not unescaped or unescaped == cur_path then
                 break
@@ -156,34 +176,96 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
         end
     end
 
-    -- 6. Strip null bytes
+    -- 6. Strip and truncate null bytes (prevents C-string termination evasion on extension-anchored rules)
     count = #paths_to_check
     for i = 1, count do
         local p = paths_to_check[i]
-        if string.find(p, "\0", 1, true) then
+        local null_idx = string.find(p, "\0", 1, true)
+        if null_idx then
+            local truncated = string.sub(p, 1, null_idx - 1)
+            table.insert(paths_to_check, _M.clean_path(truncated))
             local no_null = string.gsub(p, "%z", "")
             table.insert(paths_to_check, _M.clean_path(no_null))
         end
     end
 
-    -- 7. Strip embedded URI fragments (#) to prevent regex anchor evasion
+    -- 7. Strip embedded URI query (?) and fragments (#) to prevent regex anchor evasion
     count = #paths_to_check
     for i = 1, count do
         local p = paths_to_check[i]
-        local hash_idx = string.find(p, "#", 1, true)
-        if hash_idx then
-            local before = string.sub(p, 1, hash_idx - 1)
-            table.insert(paths_to_check, _M.clean_path(before))
+        local q_idx = string.find(p, "?", 1, true)
+        local h_idx = string.find(p, "#", 1, true)
+        local idx = nil
+        if q_idx and h_idx then
+            idx = math.min(q_idx, h_idx)
+        else
+            idx = q_idx or h_idx
+        end
+        if idx then
+            local before = string.sub(p, 1, idx - 1)
+            if before ~= "" then
+                table.insert(paths_to_check, _M.clean_path(before))
+            end
         end
     end
 
-    -- 8. Deduplicate candidates and maintain order
+    -- 8. Strip Windows NTFS Alternate Data Streams (::$DATA) evasion
+    count = #paths_to_check
+    for i = 1, count do
+        local p = paths_to_check[i]
+        if string.find(string.lower(p), "::$data", 1, true) then
+            local stripped = string.gsub(p, "::%$[dD][aA][tT][aA]", "")
+            table.insert(paths_to_check, _M.clean_path(stripped))
+        end
+    end
+
+    -- 9. Strip trailing dots and spaces from path segments (Windows/IIS Win32 API evasion)
+    count = #paths_to_check
+    for i = 1, count do
+        local p = paths_to_check[i]
+        if string.find(p, "%.") or string.find(p, " ") then
+            local parts = {}
+            for part in string.gmatch(p, "[^/]+") do
+                table.insert(parts, part)
+            end
+            local modified = false
+            local cleaned_segments = {}
+            for _, seg in ipairs(parts) do
+                if seg ~= "." and seg ~= ".." and seg ~= "" then
+                    local trimmed = string.match(seg, "^(.-)[.%s]+$")
+                    if trimmed and trimmed ~= "" then
+                        table.insert(cleaned_segments, trimmed)
+                        modified = true
+                    else
+                        table.insert(cleaned_segments, seg)
+                    end
+                else
+                    table.insert(cleaned_segments, seg)
+                end
+            end
+            if modified then
+                local joined = "/" .. table.concat(cleaned_segments, "/")
+                table.insert(paths_to_check, _M.clean_path(joined))
+            end
+        end
+    end
+
+    -- 10. Deduplicate candidates and maintain order
     local candidate_paths = {}
     local seen = {}
     for _, p in ipairs(paths_to_check) do
-        if p ~= "" and not seen[p] then
-            seen[p] = true
-            table.insert(candidate_paths, p)
+        if p ~= "" then
+            if not seen[p] then
+                seen[p] = true
+                table.insert(candidate_paths, p)
+            end
+            if p ~= "/" and string.sub(p, -1) ~= "/" then
+                local p_slash = p .. "/"
+                if not seen[p_slash] then
+                    seen[p_slash] = true
+                    table.insert(candidate_paths, p_slash)
+                end
+            end
         end
     end
 
