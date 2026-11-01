@@ -75,6 +75,22 @@ function _M.clean_path(p)
     return cleaned
 end
 
+local function strip_scheme_and_authority(s)
+    if not s or s == "" then
+        return s, false
+    end
+    local scheme_idx = string.find(s, "://", 1, true)
+    if scheme_idx then
+        local rest = string.sub(s, scheme_idx + 3)
+        local slash_idx = string.find(rest, "[/\\]")
+        if slash_idx then
+            return string.sub(rest, slash_idx), true
+        end
+        return "/", true
+    end
+    return s, false
+end
+
 -- Extract candidate paths neutralizing common evasion tricks
 function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     local paths_to_check = {}
@@ -93,38 +109,29 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     end
 
     -- 1a. Extract path from absolute URIs (e.g. http://example.com/path, http://example.com\path)
-    for _, initial in ipairs({ path_str, raw_uri_path, raw_path }) do
-        if initial and initial ~= "" then
-            local scheme_idx = string.find(initial, "://", 1, true)
-            if scheme_idx then
-                local rest = string.sub(initial, scheme_idx + 3)
-                local slash_idx = string.find(rest, "[/\\]")
-                if slash_idx then
-                    table.insert(paths_to_check, _M.clean_path(string.sub(rest, slash_idx)))
-                end
-            end
-        end
-    end
-
-    -- 2. Add RawPath if specified and different (stripping query if leaked)
-    if raw_path and raw_path ~= "" then
-        local raw_path_clean = strip_query(raw_path)
-        if raw_path_clean ~= "" and raw_path_clean ~= base_path then
-            table.insert(paths_to_check, _M.clean_path(raw_path_clean))
-        end
-    end
-
-    -- 3. Perform iterative unescaping (up to 5 times) to prevent multi-layer URL encoding evasion (%25252e%25252e)
     local to_unescape = { base_path }
     if raw_uri_path and raw_uri_path ~= "" and raw_uri_path ~= base_path then
         table.insert(to_unescape, raw_uri_path)
     end
-    if raw_path and raw_path ~= "" and raw_path ~= base_path then
+    if raw_path and raw_path ~= "" then
         local raw_clean = strip_query(raw_path)
         if raw_clean ~= "" and raw_clean ~= base_path and raw_clean ~= raw_uri_path then
             table.insert(to_unescape, raw_clean)
+            table.insert(paths_to_check, _M.clean_path(raw_clean))
         end
     end
+
+    for _, initial in ipairs({ path_str, raw_uri_path, raw_path }) do
+        if initial and initial ~= "" then
+            local extracted, ok = strip_scheme_and_authority(initial)
+            if ok then
+                table.insert(paths_to_check, _M.clean_path(extracted))
+                table.insert(to_unescape, extracted)
+            end
+        end
+    end
+
+    -- 3. Perform iterative unescaping (up to 5 times) to prevent multi-layer URL encoding evasion (%25252e%25252e)
     for _, initial in ipairs(to_unescape) do
         local cur_path = initial
         for _ = 1, 5 do
@@ -133,6 +140,10 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
                 break
             end
             table.insert(paths_to_check, _M.clean_path(unescaped))
+            local extracted, ok = strip_scheme_and_authority(unescaped)
+            if ok then
+                table.insert(paths_to_check, _M.clean_path(extracted))
+            end
             cur_path = unescaped
         end
     end
@@ -223,7 +234,7 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     count = #paths_to_check
     for i = 1, count do
         local p = paths_to_check[i]
-        if string.find(p, "%.") or string.find(p, " ") then
+        if string.find(p, "%.") or string.find(p, "%s") then
             local parts = {}
             for part in string.gmatch(p, "[^/]+") do
                 table.insert(parts, part)
@@ -255,6 +266,26 @@ function _M.extract_candidate_paths(raw_path, path_str, request_uri)
     local seen = {}
     for _, p in ipairs(paths_to_check) do
         if p ~= "" then
+            local extracted, ok = strip_scheme_and_authority(p)
+            if ok then
+                p = extracted
+            end
+            if string.sub(p, 1, 1) ~= "/" then
+                p = "/" .. p
+            end
+            p = _M.clean_path(p)
+            if string.sub(p, 1, 7) == "/http:/" or string.sub(p, 1, 8) == "/https:/" then
+                local second_slash = string.find(p, "/", 2, true)
+                if second_slash then
+                    local rest = string.sub(p, second_slash + 1)
+                    local slash_idx = string.find(rest, "[/\\]")
+                    if slash_idx then
+                        p = _M.clean_path(string.sub(rest, slash_idx))
+                    else
+                        p = "/"
+                    end
+                end
+            end
             if not seen[p] then
                 seen[p] = true
                 table.insert(candidate_paths, p)

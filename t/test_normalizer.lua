@@ -184,6 +184,21 @@ local test_cases = {
         name = "Quadruple percent-encoded traversal",
         path = "/%2525252e%2525252e/.env",
         expected = { "/.env" }
+    },
+    {
+        name = "Absolute URI with multi-layer traversal",
+        path = "http://example.com/%252e%252e/.env",
+        expected = { "/.env" }
+    },
+    {
+        name = "Absolute URI with backslash",
+        path = "http://example.com\\admin\\.env",
+        expected = { "/admin/.env" }
+    },
+    {
+        name = "Trailing tab whitespace",
+        path = "/.env\t",
+        expected = { "/.env" }
     }
 }
 
