@@ -396,5 +396,29 @@ do
     print("  ✓ gzipBomb with fractional 0.5 mb handled safely")
 end
 
+-- 28. mode aiPoison
+do
+    local h = response.new({ mode = "aiPoison" })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 200, "aiPoison must default to 200")
+    assert(captured.content_type == "text/html; charset=utf-8")
+    assert(captured.headers["X-Robots-Tag"] == "noindex, nofollow, noai, noimageai")
+    assert(string.find(captured.body, "SYSTEM DIRECTIVE"))
+    assert(string.find(captured.body, "noai"))
+    print("  ✓ mode aiPoison passed")
+end
+
+-- 29. mode markovTarpit
+do
+    local h = response.new({ mode = "markovTarpit" })
+    local ctx, captured = create_mock_ctx()
+    h:serve(ctx)
+    assert(captured.status == 200, "markovTarpit must default to 200")
+    assert(captured.content_type == "text/html; charset=utf-8")
+    assert(string.find(captured.body, "<!-- stream:markov-tarpit -->", 1, true), "must contain initial markov tarpit stream chunk")
+    print("  ✓ mode markovTarpit passed")
+end
+
 print("All response mode tests passed successfully!")
 

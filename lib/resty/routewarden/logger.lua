@@ -2,7 +2,7 @@
 -- Security logging emitting structured JSON records for CrowdSec and NGINX logs
 
 local _M = {
-    _VERSION = "1.7.0"
+    _VERSION = "1.8.0"
 }
 
 -- Check for standard OpenResty cjson / cjson.safe encoder
@@ -75,10 +75,24 @@ function _M.log_security_event(event_data, security_log_enabled, custom_sink)
     end
 
     local timestamp = get_iso_timestamp()
+    local action = event_data.action or "text"
+    local clean_mode = string.lower(string.gsub(string.gsub(action, "_", ""), "%s+", ""))
+    local verdict = event_data.verdict
+    if not verdict or verdict == "" then
+        if clean_mode == "tarpit" or clean_mode == "markovtarpit" then
+            verdict = "TARPIT"
+        elseif clean_mode == "captcha" or clean_mode == "ratelimitchallenge" or clean_mode == "challenge" then
+            verdict = "CHALLENGE"
+        else
+            verdict = "BLOCK"
+        end
+    end
+
     local payload = {
         type = "routewarden_block",
         timestamp = timestamp,
         level = "warn",
+        verdict = verdict,
         plugin = "nginx-warden",
         client_ip = event_data.client_ip or "",
         method = event_data.method or "",
@@ -86,7 +100,7 @@ function _M.log_security_event(event_data, security_log_enabled, custom_sink)
         request_uri = event_data.request_uri or "",
         pattern = event_data.pattern or "",
         matched_pattern = event_data.pattern or "",
-        action = event_data.action or "text",
+        action = action,
         status_code = event_data.status_code or 403,
         reason = event_data.reason or "path_blocked",
         user_agent = event_data.user_agent or ""

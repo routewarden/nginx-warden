@@ -2,7 +2,7 @@
 -- Configuration defaults and default sensitive/allow regex patterns
 
 local _M = {
-    _VERSION = "1.7.0"
+    _VERSION = "1.8.0"
 }
 
 -- Default block patterns for sensitive endpoints, files, and credentials
@@ -58,7 +58,10 @@ function _M.default_response_config()
         retry_after_seconds = 300,
         tarpit_delay_ms = 1000,
         tarpit_max_duration_seconds = 60,
-        stream_size_mb = 100
+        stream_size_mb = 100,
+        pow_difficulty = 16,
+        pow_secret = nil,
+        pow_timeout_seconds = 300
     }
 end
 
@@ -73,8 +76,22 @@ function _M.default_config()
         allow_patterns = {},
         allowed_ips = {},
         allowed_asns = {},
+        blocked_asns = {},
         asn_db = nil,
         trusted_proxies = {},
+        bot_defense_level = nil,
+        block_ai_bots = false,
+        ai_bot_profile = "train_only",
+        block_user_agents = {},
+        allow_user_agents = {},
+        honeypot_trap_paths = {},
+        enable_robots_txt_honeypot = false,
+        robots_txt_honeypot_secret = "routewarden-default-robots-trap-seed",
+        trap_ban_duration = "24h",
+        verify_search_engine_bots = false,
+        detect_browser_impersonation = false,
+        block_script_clients = false,
+        block_cloud_hosts = false,
         methods = { "GET" },
         check_query = false,
         check_headers = {},
