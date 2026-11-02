@@ -7,9 +7,10 @@ local ip_filter = require("resty.routewarden.ip_filter")
 local asn_filter = require("resty.routewarden.asn_filter")
 local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
+local robots_honeypot = require("resty.routewarden.robots_honeypot")
 
 local _M = {
-    _VERSION = "1.7.0"
+    _VERSION = "1.8.0"
 }
 
 -- Check if ngx.re is available (OpenResty PCRE engine)
@@ -450,7 +451,47 @@ local function normalize_json_config(raw)
     elseif raw.allowPatterns ~= nil then t.allow_patterns = raw.allowPatterns end
 
     t.allowed_asns = raw.allowed_asns or raw.allowedASNs
+    t.blocked_asns = raw.blocked_asns or raw.blockedASNs
     t.asn_db = raw.asn_db or raw.asnDB
+    if raw.bot_defense_level ~= nil then t.bot_defense_level = raw.bot_defense_level
+    elseif raw.botDefenseLevel ~= nil then t.bot_defense_level = raw.botDefenseLevel end
+
+    if raw.block_ai_bots ~= nil then t.block_ai_bots = raw.block_ai_bots
+    elseif raw.blockAIBots ~= nil then t.block_ai_bots = raw.blockAIBots end
+
+    if raw.ai_bot_profile ~= nil then t.ai_bot_profile = raw.ai_bot_profile
+    elseif raw.aiBotProfile ~= nil then t.ai_bot_profile = raw.aiBotProfile end
+
+    if raw.block_user_agents ~= nil then t.block_user_agents = raw.block_user_agents
+    elseif raw.blockUserAgents ~= nil then t.block_user_agents = raw.blockUserAgents end
+
+    if raw.allow_user_agents ~= nil then t.allow_user_agents = raw.allow_user_agents
+    elseif raw.allowUserAgents ~= nil then t.allow_user_agents = raw.allowUserAgents end
+
+    if raw.honeypot_trap_paths ~= nil then t.honeypot_trap_paths = raw.honeypot_trap_paths
+    elseif raw.honeypotTrapPaths ~= nil then t.honeypot_trap_paths = raw.honeypotTrapPaths end
+
+    if raw.enable_robots_txt_honeypot ~= nil then t.enable_robots_txt_honeypot = raw.enable_robots_txt_honeypot
+    elseif raw.enableRobotsTxtHoneypot ~= nil then t.enable_robots_txt_honeypot = raw.enableRobotsTxtHoneypot end
+
+    if raw.robots_txt_honeypot_secret ~= nil then t.robots_txt_honeypot_secret = raw.robots_txt_honeypot_secret
+    elseif raw.robotsTxtHoneypotSecret ~= nil then t.robots_txt_honeypot_secret = raw.robotsTxtHoneypotSecret end
+
+    if raw.trap_ban_duration ~= nil then t.trap_ban_duration = raw.trap_ban_duration
+    elseif raw.trapBanDuration ~= nil then t.trap_ban_duration = raw.trapBanDuration end
+
+    if raw.verify_search_engine_bots ~= nil then t.verify_search_engine_bots = raw.verify_search_engine_bots
+    elseif raw.verifySearchEngineBots ~= nil then t.verify_search_engine_bots = raw.verifySearchEngineBots end
+
+    if raw.detect_browser_impersonation ~= nil then t.detect_browser_impersonation = raw.detect_browser_impersonation
+    elseif raw.detectBrowserImpersonation ~= nil then t.detect_browser_impersonation = raw.detectBrowserImpersonation end
+
+    if raw.block_script_clients ~= nil then t.block_script_clients = raw.block_script_clients
+    elseif raw.blockScriptClients ~= nil then t.block_script_clients = raw.blockScriptClients end
+
+    if raw.block_cloud_hosts ~= nil then t.block_cloud_hosts = raw.block_cloud_hosts
+    elseif raw.blockCloudHosts ~= nil then t.block_cloud_hosts = raw.blockCloudHosts end
+
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -510,6 +551,35 @@ local function normalize_json_config(raw)
     return t
 end
 
+local function apply_bot_defense_level(cfg, level)
+    if not level or type(level) ~= "string" then return end
+    local lvl = string.lower(string.match(level, "^%s*(.-)%s*$"))
+    if lvl == "light" or lvl == "relaxed" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "train_only"
+        cfg.block_script_clients = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "standard" or lvl == "moderate" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "train_only"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "strict" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "all"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    elseif lvl == "aggressive" or lvl == "paranoia" then
+        cfg.block_ai_bots = true
+        cfg.ai_bot_profile = "aggressive"
+        cfg.block_script_clients = true
+        cfg.detect_browser_impersonation = true
+        cfg.verify_search_engine_bots = true
+    end
+end
+
 -- Constructor for RouteWarden instance
 function _M.new(opts)
     local cfg = config.default_config()
@@ -543,6 +613,13 @@ function _M.new(opts)
 
     local function apply_opts(source)
         if not source or type(source) ~= "table" then return end
+
+        local bdl = source.bot_defense_level
+        if bdl == nil then bdl = source.botDefenseLevel end
+        if bdl ~= nil then
+            cfg.bot_defense_level = bdl
+            apply_bot_defense_level(cfg, bdl)
+        end
 
         if source.enabled ~= nil then cfg.enabled = source.enabled end
 
@@ -599,7 +676,56 @@ function _M.new(opts)
         if ap then cfg.allow_patterns = ap end
 
         if source.allowed_asns or source.allowedASNs then cfg.allowed_asns = source.allowed_asns or source.allowedASNs end
+        if source.blocked_asns or source.blockedASNs then cfg.blocked_asns = source.blocked_asns or source.blockedASNs end
         if source.asn_db or source.asnDB then cfg.asn_db = source.asn_db or source.asnDB end
+
+        local block_ai = source.block_ai_bots
+        if block_ai == nil then block_ai = source.blockAIBots end
+        if block_ai ~= nil then cfg.block_ai_bots = block_ai end
+
+        local ai_prof = source.ai_bot_profile
+        if ai_prof == nil then ai_prof = source.aiBotProfile end
+        if ai_prof then cfg.ai_bot_profile = ai_prof end
+
+        local bua = source.block_user_agents
+        if bua == nil then bua = source.blockUserAgents end
+        if bua then cfg.block_user_agents = bua end
+
+        local aua = source.allow_user_agents
+        if aua == nil then aua = source.allowUserAgents end
+        if aua then cfg.allow_user_agents = aua end
+
+        local htp = source.honeypot_trap_paths
+        if htp == nil then htp = source.honeypotTrapPaths end
+        if htp then cfg.honeypot_trap_paths = htp end
+
+        local erth = source.enable_robots_txt_honeypot
+        if erth == nil then erth = source.enableRobotsTxtHoneypot end
+        if erth ~= nil then cfg.enable_robots_txt_honeypot = erth end
+
+        local rths = source.robots_txt_honeypot_secret
+        if rths == nil then rths = source.robotsTxtHoneypotSecret end
+        if rths ~= nil then cfg.robots_txt_honeypot_secret = rths end
+
+        local tbd = source.trap_ban_duration
+        if tbd == nil then tbd = source.trapBanDuration end
+        if tbd then cfg.trap_ban_duration = tbd end
+
+        local vseb = source.verify_search_engine_bots
+        if vseb == nil then vseb = source.verifySearchEngineBots end
+        if vseb ~= nil then cfg.verify_search_engine_bots = vseb end
+
+        local dbi = source.detect_browser_impersonation
+        if dbi == nil then dbi = source.detectBrowserImpersonation end
+        if dbi ~= nil then cfg.detect_browser_impersonation = dbi end
+
+        local bsc = source.block_script_clients
+        if bsc == nil then bsc = source.blockScriptClients end
+        if bsc ~= nil then cfg.block_script_clients = bsc end
+
+        local bch = source.block_cloud_hosts
+        if bch == nil then bch = source.blockCloudHosts end
+        if bch ~= nil then cfg.block_cloud_hosts = bch end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -745,7 +871,9 @@ function _M.new(opts)
     local all_trusted_proxies = {}
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
 
-    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json)
+    local blocked_asns = cfg.blocked_asns or cfg.blockedASNs
+    local block_cloud = cfg.block_cloud_hosts or cfg.blockCloudHosts
+    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json, blocked_asns, block_cloud)
     if not asn_matcher then return nil, asn_err end
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
@@ -755,8 +883,47 @@ function _M.new(opts)
         end
     end
 
+    -- Compile user agent patterns
+    local all_block_ua = {}
+    add_entries(all_block_ua, cfg.block_user_agents or cfg.blockUserAgents)
+    local compiled_block_ua = {}
+    for _, p in ipairs(all_block_ua) do
+        local trimmed = string.match(p, "^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            local compiled = compile_regex(trimmed)
+            if compiled then table.insert(compiled_block_ua, compiled) end
+        end
+    end
+
+    local all_allow_ua = {}
+    add_entries(all_allow_ua, cfg.allow_user_agents or cfg.allowUserAgents)
+    local compiled_allow_ua = {}
+    for _, p in ipairs(all_allow_ua) do
+        local trimmed = string.match(p, "^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            local compiled = compile_regex(trimmed)
+            if compiled then table.insert(compiled_allow_ua, compiled) end
+        end
+    end
+
     -- Initialize Response Handler
     local resp_handler = response.new(cfg.response)
+
+    local function parse_ban_duration(dur)
+        if type(dur) == "number" then return dur end
+        if not dur or dur == "" then return 86400 end
+        local n, unit = string.match(dur, "^(%d+)([smhd]?)$")
+        if not n then
+            local num = tonumber(dur)
+            return num or 86400
+        end
+        n = tonumber(n)
+        if unit == "s" or unit == "" then return n end
+        if unit == "m" then return n * 60 end
+        if unit == "h" then return n * 3600 end
+        if unit == "d" then return n * 86400 end
+        return 86400
+    end
 
     local self = {
         config = cfg,
@@ -764,13 +931,34 @@ function _M.new(opts)
         compiled_block = compiled_block,
         compiled_allow = compiled_allow,
         compiled_body = compiled_body,
+        compiled_block_ua = compiled_block_ua,
+        compiled_allow_ua = compiled_allow_ua,
         ip_matcher = ip_matcher,
         asn_matcher = asn_matcher,
         response_handler = resp_handler,
-        custom_log_sink = nil
+        custom_log_sink = nil,
+        ban_table = {},
+        parsed_ban_duration = parse_ban_duration(cfg.trap_ban_duration),
+        fcrdns_cache = {},
+        custom_fcrdns_verifier = nil
     }
 
     return setmetatable(self, { __index = _M })
+end
+
+local function normalize_ip(ip)
+    if not ip or ip == "" then return "" end
+    local clean = string.match(ip, "^%s*(.-)%s*$")
+    local ipv4 = string.match(clean, "^(%d+%.%d+%.%d+%.%d+):%d+$")
+    if ipv4 then return ipv4 end
+    local ipv6 = string.match(clean, "^%[([%a%d%.:]+)%]:%d+$")
+    if ipv6 then clean = ipv6 end
+    if string.sub(clean, 1, 1) == "[" and string.sub(clean, -1) == "]" then
+        clean = string.sub(clean, 2, -2)
+    end
+    local v4_mapped = string.match(clean, "^::[fF][fF][fF][fF]:(%d+%.%d+%.%d+%.%d+)$")
+    if v4_mapped then return v4_mapped end
+    return clean
 end
 
 local VALID_MODES = {
@@ -792,7 +980,13 @@ local VALID_MODES = {
     proxy = true,
     infinitestream = true,
     infinite_stream = true,
-    xml = true
+    xml = true,
+    aipoison = true,
+    ai_poison = true,
+    markovtarpit = true,
+    markov_tarpit = true,
+    tokenbleed = true,
+    token_bleed = true
 }
 
 -- Validate configuration (returns true, or false, err)
@@ -823,6 +1017,368 @@ function _M:set_log_sink(sink)
     self.custom_log_sink = sink
 end
 
+function _M:set_fcrdns_verifier(verifier)
+    self.custom_fcrdns_verifier = verifier
+end
+
+local function detect_search_engine(ua)
+    if not ua or ua == "" then return nil end
+    local lower = string.lower(ua)
+    if lower:find("googlebot") or lower:find("google%-inspectiontool") or lower:find("google%-other") or lower:find("adsbot%-google") then
+        return "google"
+    end
+    if lower:find("bingbot") or lower:find("bingpreview") then
+        return "bing"
+    end
+    if lower:find("applebot") then
+        return "apple"
+    end
+    if lower:find("yandexbot") or lower:find("yandeximages") or lower:find("yandexaccessibilitybot") or lower:find("yandexmobilebot") or lower:find("yandexdirect") or lower:find("yandexmetrika") then
+        return "yandex"
+    end
+    if lower:find("baiduspider") then
+        return "baidu"
+    end
+    if lower:find("duckduckbot") then
+        return "duckduckgo"
+    end
+    if (lower:find("yahoo") and lower:find("slurp")) or lower:find("slurp") then
+        return "yahoo"
+    end
+    if lower:find("yeti") then
+        return "naver"
+    end
+    if lower:find("sogou") and lower:find("spider") then
+        return "sogou"
+    end
+    if lower:find("mojeekbot") then
+        return "mojeek"
+    end
+    return nil
+end
+
+local function get_header_ci(headers, name)
+    if not headers or type(headers) ~= "table" then return nil end
+    local lower_name = string.lower(name)
+    local val = headers[lower_name]
+    if val == nil then
+        for k, v in pairs(headers) do
+            if type(k) == "string" and string.lower(k) == lower_name then
+                val = v
+                break
+            end
+        end
+    end
+    if val == nil then return nil end
+    if type(val) == "table" then
+        return val[1] and tostring(val[1]) or nil
+    end
+    return tostring(val)
+end
+
+local function is_ai_bot(ua)
+    if not ua or ua == "" then return false end
+    local lower_ua = string.lower(ua)
+    return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("cohere%-ai") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("mistralbot") or lower_ua:find("deepseekbot") or lower_ua:find("exabot") or lower_ua:find("metaphorbot") or lower_ua:find("cotalker") or lower_ua:find("petalbot") or lower_ua:find("perplexitybot") or lower_ua:find("perplexity%-search") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user") or lower_ua:find("grokbot") or lower_ua:find("twitterbot") or lower_ua:find("duckassistbot") or lower_ua:find("bingpreview") or lower_ua:find("firecrawl") or lower_ua:find("apify") or lower_ua:find("zyte") or lower_ua:find("brightdata") or lower_ua:find("crawlbase") or lower_ua:find("scrapingbee") or lower_ua:find("octoparse") or lower_ua:find("autogpt") or lower_ua:find("langchain") or lower_ua:find("llamaindex") or lower_ua:find("agentgpt")
+end
+
+local grease_regex = compile_regex([[(?i)(?:Not[ _?=/().;:A-Za-z0-9-]*Brand|Not[^\w\s]?A[^\w\s]?Brand)]])
+
+local function has_grease_brand(sec_ch_ua)
+    if not sec_ch_ua or sec_ch_ua == "" then return false end
+    if grease_regex and grease_regex:match(sec_ch_ua) then
+        return true
+    end
+    local lower = string.lower(sec_ch_ua)
+    if lower:find("not") and lower:find("brand") then
+        return true
+    end
+    return false
+end
+
+local function detect_browser_header_order(header_order, ua)
+    if not header_order or #header_order == 0 or not ua or ua == "" then
+        return false, nil
+    end
+    local lower_ua = string.lower(ua)
+    local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+    if not is_browser then return false, nil end
+    local chrome_ver = string.match(ua, "[Cc]hrome/(%d+)") or string.match(ua, "[Cc]hromium/(%d+)") or string.match(ua, "[Ee]dg/(%d+)")
+    if not chrome_ver then return false, nil end
+    local ver_num = tonumber(chrome_ver)
+    if not ver_num or ver_num < 89 then return false, nil end
+
+    local sec_ch_ua_idx = -1
+    local ua_idx = -1
+    local accept_idx = -1
+
+    for i, h in ipairs(header_order) do
+        local lower_h = string.lower(string.match(h, "^%s*(.-)%s*$"))
+        if lower_h == "sec-ch-ua" and sec_ch_ua_idx == -1 then
+            sec_ch_ua_idx = i
+        elseif lower_h == "user-agent" and ua_idx == -1 then
+            ua_idx = i
+        elseif lower_h == "accept" and accept_idx == -1 then
+            accept_idx = i
+        end
+    end
+
+    if sec_ch_ua_idx ~= -1 then
+        if ua_idx ~= -1 and ua_idx < sec_ch_ua_idx then
+            return true, "header_order_anomaly"
+        end
+        if accept_idx ~= -1 and accept_idx < sec_ch_ua_idx then
+            return true, "header_order_anomaly"
+        end
+    end
+
+    return false, nil
+end
+
+local function detect_browser_impersonation(ua, headers, header_order)
+    if not ua or ua == "" then return false, nil end
+    local lower_ua = string.lower(ua)
+    local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+    if not is_browser then return false, nil end
+
+    -- Search engine exemption (e.g. Googlebot)
+    if detect_search_engine(ua) then
+        return false, nil
+    end
+
+    -- Exclude recognized AI bots governed by AI bot registry profiles
+    if is_ai_bot(ua) then
+        return false, nil
+    end
+
+    -- 0. Header ordering checks (if explicit order slice provided)
+    if header_order and #header_order > 0 then
+        local is_anomaly, reason = detect_browser_header_order(header_order, ua)
+        if is_anomaly then return true, reason end
+    end
+
+    -- 1. Mandatory companion headers
+    local accept_lang = get_header_ci(headers, "accept-language") or ""
+    if accept_lang == "" then
+        return true, "missing_accept_language"
+    end
+
+    local accept_enc = get_header_ci(headers, "accept-encoding") or ""
+    if accept_enc == "" then
+        return true, "missing_accept_encoding"
+    end
+
+    -- 2. Client Hints platform check
+    local sec_platform = get_header_ci(headers, "sec-ch-ua-platform") or ""
+    if sec_platform ~= "" then
+        local plat = string.lower(string.gsub(sec_platform, '"', ''))
+        plat = string.match(plat, "^%s*(.-)%s*$")
+        local claimed_win = lower_ua:find("windows") ~= nil
+        local claimed_mac = lower_ua:find("macintosh") ~= nil or lower_ua:find("mac os x") ~= nil
+        local claimed_linux = lower_ua:find("linux") ~= nil and lower_ua:find("android") == nil
+        local claimed_android = lower_ua:find("android") ~= nil
+        local claimed_ios = lower_ua:find("iphone") ~= nil or lower_ua:find("ipad") ~= nil or lower_ua:find("ipod") ~= nil
+
+        if plat == "windows" and not claimed_win then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif (plat == "macos" or plat == "mac os x") and not claimed_mac then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "linux" and not claimed_linux then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "android" and not claimed_android then
+            return true, "sec_ch_ua_platform_mismatch"
+        elseif plat == "ios" and not claimed_ios then
+            return true, "sec_ch_ua_platform_mismatch"
+        end
+    end
+
+    -- 3. Client Hints mobile check
+    local sec_mobile_raw = get_header_ci(headers, "sec-ch-ua-mobile") or ""
+    if sec_mobile_raw ~= "" then
+        local sec_mobile = string.gsub(sec_mobile_raw, '[%s"?]', '')
+        local claimed_mobile = lower_ua:find("mobile") ~= nil or lower_ua:find("iphone") ~= nil or lower_ua:find("ipod") ~= nil or lower_ua:find("android") ~= nil
+
+        if sec_mobile == "1" and not claimed_mobile then
+            return true, "sec_ch_ua_mobile_mismatch"
+        end
+        if sec_mobile == "0" then
+            if lower_ua:find("iphone") ~= nil or lower_ua:find("ipod") ~= nil or (lower_ua:find("android") ~= nil and lower_ua:find("mobile") ~= nil) then
+                return true, "sec_ch_ua_mobile_mismatch"
+            end
+        end
+    end
+
+    -- 4. Client Hints brand check
+    local sec_ch_ua = get_header_ci(headers, "sec-ch-ua") or ""
+    if sec_ch_ua ~= "" then
+        local is_firefox = lower_ua:find("firefox") ~= nil
+        local is_safari_only = lower_ua:find("safari") ~= nil and lower_ua:find("chrome") == nil and lower_ua:find("chromium") == nil and lower_ua:find("edg") == nil
+        if (is_firefox or is_safari_only) and string.find(string.lower(sec_ch_ua), "chromium") then
+            return true, "sec_ch_ua_brand_mismatch"
+        end
+    end
+
+    -- 5. Modern Chrome Fetch Metadata & Client Hints
+    local chrome_ver = string.match(ua, "[Cc]hrome/(%d+)") or string.match(ua, "[Cc]hromium/(%d+)") or string.match(ua, "[Ee]dg/(%d+)")
+    if chrome_ver then
+        local ver_num = tonumber(chrome_ver)
+        if ver_num then
+            if ver_num >= 89 and sec_platform ~= "" and sec_ch_ua == "" then
+                return true, "missing_sec_ch_ua"
+            end
+            if ver_num >= 90 then
+                local fetch_site = get_header_ci(headers, "sec-fetch-site") or ""
+                local fetch_mode = get_header_ci(headers, "sec-fetch-mode") or ""
+                local fetch_dest = get_header_ci(headers, "sec-fetch-dest") or ""
+                if fetch_site == "" and fetch_mode == "" and fetch_dest == "" then
+                    return true, "missing_sec_fetch"
+                end
+                if string.lower(fetch_dest) == "document" and fetch_mode ~= "" and string.lower(fetch_mode) ~= "navigate" then
+                    return true, "sec_fetch_mode_mismatch"
+                end
+            end
+            if ver_num >= 89 and sec_ch_ua ~= "" then
+                local lower_ch = string.lower(sec_ch_ua)
+                if lower_ch:find("google chrome") or lower_ch:find("chromium") then
+                    if not has_grease_brand(sec_ch_ua) then
+                        return true, "missing_grease_brand"
+                    end
+                end
+            end
+        end
+    end
+
+    return false, nil
+end
+
+local function detect_script_client(ua, headers)
+    if get_header_ci(headers, "x-playwright") then return true, "playwright_headless" end
+    if get_header_ci(headers, "x-puppeteer") then return true, "puppeteer_headless" end
+    if get_header_ci(headers, "x-selenium") then return true, "selenium_headless" end
+    if get_header_ci(headers, "x-scrapy") then return true, "scrapy_crawler" end
+    if get_header_ci(headers, "x-cypress") then return true, "cypress_headless" end
+    if get_header_ci(headers, "sec-webdriver") or get_header_ci(headers, "x-headless") or get_header_ci(headers, "x-headless-chrome") or get_header_ci(headers, "x-automation") then
+        return true, "webdriver_automation"
+    end
+
+    if ua and ua ~= "" then
+        local lower_ua = string.lower(ua)
+        local script_patterns = {
+            "python%-requests", "requests/", "aiohttp", "httpx", "scrapy", "urllib", "tornado", "curl%-cffi", "mechanize",
+            "axios", "node%-fetch", "undici", "got/", "superagent", "needle/",
+            "go%-http%-client",
+            "okhttp", "apache%-httpclient", "java/", "httpclient",
+            "guzzlehttp", "guzzle/",
+            "reqwest/",
+            "faraday", "httparty", "rest%-client",
+            "curl/", "wget/", "libwww%-perl", "phantomjs", "headlesschrome", "puppeteer", "playwright"
+        }
+        for _, pat in ipairs(script_patterns) do
+            if string.find(lower_ua, pat) then
+                return true, string.gsub(pat, "%%", "")
+            end
+        end
+    end
+
+    return false, nil
+end
+
+_M.detect_search_engine = detect_search_engine
+_M.detect_browser_impersonation = detect_browser_impersonation
+_M.detect_browser_header_order = detect_browser_header_order
+_M.detect_script_client = detect_script_client
+
+local function is_valid_host_for_engine(host, engine)
+    if not host or not engine then return false end
+    local h = string.lower(host)
+    if string.sub(h, -1) == "." then
+        h = string.sub(h, 1, -2)
+    end
+    if engine == "google" then
+        return string.find(h, "%.googlebot%.com$") ~= nil or string.find(h, "%.google%.com$") ~= nil or h == "googlebot.com" or h == "google.com"
+    elseif engine == "bing" then
+        return string.find(h, "%.search%.msn%.com$") ~= nil or h == "search.msn.com"
+    elseif engine == "apple" then
+        return string.find(h, "%.applebot%.apple%.com$") ~= nil or h == "applebot.apple.com"
+    elseif engine == "yandex" then
+        return string.find(h, "%.yandex%.ru$") ~= nil or string.find(h, "%.yandex%.net$") ~= nil or string.find(h, "%.yandex%.com$") ~= nil or h == "yandex.ru" or h == "yandex.net" or h == "yandex.com"
+    elseif engine == "baidu" then
+        return string.find(h, "%.baidu%.com$") ~= nil or string.find(h, "%.baidu%.jp$") ~= nil or h == "baidu.com" or h == "baidu.jp"
+    elseif engine == "duckduckgo" then
+        return string.find(h, "%.duckduckgo%.com$") ~= nil or h == "duckduckgo.com"
+    elseif engine == "yahoo" then
+        return string.find(h, "%.crawl%.yahoo%.net$") ~= nil or h == "crawl.yahoo.net"
+    elseif engine == "naver" then
+        return string.find(h, "%.naver%.com$") ~= nil or h == "naver.com"
+    elseif engine == "sogou" then
+        return string.find(h, "%.sogou%.com$") ~= nil or h == "sogou.com"
+    elseif engine == "mojeek" then
+        return string.find(h, "%.mojeek%.com$") ~= nil or h == "mojeek.com"
+    end
+    return false
+end
+
+function _M:verify_fcrdns(client_ip, engine)
+    if self.custom_fcrdns_verifier then
+        return self.custom_fcrdns_verifier(client_ip, engine)
+    end
+    local norm_ip = normalize_ip(client_ip)
+    local cache_key = engine .. ":" .. norm_ip
+    if self.fcrdns_cache and self.fcrdns_cache[cache_key] ~= nil then
+        local entry = self.fcrdns_cache[cache_key]
+        if entry.expires > os.time() then
+            return entry.valid
+        end
+    end
+
+    -- Attempt dynamic FCrDNS resolution via OpenResty's resty.dns.resolver if available
+    local valid = false
+    local has_resolver, resty_resolver = pcall(require, "resty.dns.resolver")
+    if has_resolver and resty_resolver and ngx and ngx.socket then
+        local r, _ = resty_resolver:new{
+            nameservers = {"8.8.8.8", "1.1.1.1"},
+            retrans = 2,
+            timeout = 500,
+        }
+        if r then
+            local arpa = nil
+            local o1, o2, o3, o4 = string.match(norm_ip, "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+            if o1 then
+                arpa = string.format("%s.%s.%s.%s.in-addr.arpa", o4, o3, o2, o1)
+            end
+            if arpa then
+                local answers, _ = r:query(arpa, { qtype = r.TYPE_PTR })
+                if answers and not answers.errcode then
+                    for _, ans in ipairs(answers) do
+                        if ans.ptrdname and is_valid_host_for_engine(ans.ptrdname, engine) then
+                            local fwd_answers, _ = r:query(ans.ptrdname, { qtype = r.TYPE_A })
+                            if fwd_answers and not fwd_answers.errcode then
+                                for _, f_ans in ipairs(fwd_answers) do
+                                    if f_ans.address == norm_ip then
+                                        valid = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        if valid then break end
+                    end
+                end
+            end
+        end
+    end
+
+    if not self.fcrdns_cache then
+        self.fcrdns_cache = {}
+    end
+    self.fcrdns_cache[cache_key] = {
+        valid = valid,
+        expires = os.time() + 21600 -- 6 hours TTL
+    }
+
+    return valid
+end
+
 -- Primary inspection routine
 -- Returns true if passed, or false, block_info if blocked
 function _M:inspect(req_ctx)
@@ -838,7 +1394,7 @@ function _M:inspect(req_ctx)
 
     -- Stage 1: IP Whitelist Check
     local headers = req_ctx.headers or (ngx and ngx.req and ngx.req.get_headers and ngx.req.get_headers()) or {}
-    local remote_addr = req_ctx.remote_addr or (ngx and ngx.var and ngx.var.remote_addr) or ""
+    local remote_addr = req_ctx.remote_addr or req_ctx.client_ip or (ngx and ngx.var and ngx.var.remote_addr) or ""
     local client_ip = ip_filter.extract_client_ip(headers, remote_addr, self.ip_matcher)
 
     if self.ip_matcher then
@@ -851,16 +1407,351 @@ function _M:inspect(req_ctx)
     if self.ip_matcher and self.ip_matcher.has_trusted_proxies then asn_ip = client_ip end
     if self.asn_matcher:is_allowed(asn_ip) then return true end
 
+    -- Stage 1b: Blocked ASN Check
+    local is_blocked_asn, blocked_asn_num = self.asn_matcher:is_blocked(asn_ip)
+    if is_blocked_asn then
+        local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+        local block_info = {
+            blocked = true,
+            status_code = self.config.status_code or 403,
+            reason = "asn_blocked",
+            pattern = "AS" .. tostring(blocked_asn_num),
+            matched_pattern = "AS" .. tostring(blocked_asn_num),
+            target = "AS" .. tostring(blocked_asn_num),
+            client_ip = client_ip,
+            method = method,
+            path = "AS" .. tostring(blocked_asn_num),
+            request_uri = req_ctx.raw_uri or "",
+            action = self.config.response and self.config.response.mode or "json",
+            user_agent = user_agent
+        }
+        if self.config.security_log ~= false then
+            logger.log_security_event(block_info, true, self.custom_log_sink)
+        end
+        return false, block_info
+    end
+
+    -- Stage 1c: Active Ban Table Check
+    local norm_ip = normalize_ip(client_ip)
+    local is_banned = false
+    local shared_bans = (ngx and ngx.shared and ngx.shared.routewarden_bans) or nil
+    if shared_bans then
+        local banned_until = shared_bans:get(norm_ip)
+        if banned_until and (type(banned_until) ~= "number" or banned_until > os.time()) then
+            is_banned = true
+        end
+    end
+    if not is_banned and self.ban_table and self.ban_table[norm_ip] then
+        if self.ban_table[norm_ip] > os.time() then
+            is_banned = true
+        else
+            self.ban_table[norm_ip] = nil
+        end
+    end
+
+    if is_banned then
+        local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+        local block_info = {
+            blocked = true,
+            status_code = self.config.status_code or 403,
+            reason = "ip_banned",
+            pattern = "ban_table",
+            matched_pattern = "ban_table",
+            target = client_ip,
+            client_ip = client_ip,
+            method = method,
+            path = client_ip,
+            request_uri = req_ctx.raw_uri or "",
+            action = self.config.response and self.config.response.mode or "json",
+            user_agent = user_agent
+        }
+        if self.config.security_log ~= false then
+            logger.log_security_event(block_info, true, self.custom_log_sink)
+        end
+        return false, block_info
+    end
+
+    -- Check PoW solution cookie (__rw_pow) or header (X-RW-PoW)
+    local pow = require("resty.routewarden.pow")
+    local pow_token = pow.extract_pow_token(headers)
+    local is_pow_valid = false
+    if pow_token and pow_token ~= "" then
+        local sec = (self.config.response and self.config.response.pow_secret) or pow.DEFAULT_SECRET
+        local diff = (self.config.response and self.config.response.pow_difficulty) or pow.DEFAULT_DIFFICULTY
+        local tout = (self.config.response and self.config.response.pow_timeout_seconds) or pow.DEFAULT_TIMEOUT_SECONDS
+        local ok, _ = pow.verify_solution(client_ip, sec, pow_token, tout)
+        if ok then
+            is_pow_valid = true
+        end
+    end
+
+    -- Stage 1d: User-Agent & AI Bot Inspection
+    local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+    local ua_allowed = false
+    for _, allow_ua in ipairs(self.compiled_allow_ua) do
+        if allow_ua:match(user_agent) then
+            ua_allowed = true
+            break
+        end
+    end
+
+    if not ua_allowed and self.config.verify_search_engine_bots then
+        local engine = detect_search_engine(user_agent)
+        if engine then
+            local is_verified = self:verify_fcrdns(client_ip, engine)
+            if not is_verified then
+                if is_pow_valid then
+                    ua_allowed = true
+                else
+                    local block_info = {
+                        blocked = true,
+                        status_code = self.config.status_code or 403,
+                        reason = "search_engine_spoofed",
+                        pattern = engine .. "_spoofed",
+                        matched_pattern = engine .. "_spoofed",
+                        target = user_agent,
+                        client_ip = client_ip,
+                        method = method,
+                        path = user_agent,
+                        request_uri = req_ctx.raw_uri or "",
+                        action = self.config.response and self.config.response.mode or "json",
+                        user_agent = user_agent
+                    }
+                    if self.config.security_log ~= false then
+                        logger.log_security_event(block_info, true, self.custom_log_sink)
+                    end
+                    return false, block_info
+                end
+            else
+                ua_allowed = true
+            end
+        end
+    end
+
+    if not ua_allowed then
+        local ua_blocked = false
+        local ua_pattern = ""
+        local ua_reason = ""
+
+        for _, block_ua in ipairs(self.compiled_block_ua) do
+            if block_ua:match(user_agent) then
+                ua_blocked = true
+                ua_pattern = block_ua.pattern or block_ua.raw_regex
+                ua_reason = "user_agent_blocked"
+                break
+            end
+        end
+
+        local block_ai = self.config.block_ai_bots
+        if block_ai == nil then block_ai = self.config.blockAIBots end
+        if not ua_blocked and block_ai and user_agent ~= "" then
+            local profile = string.lower(self.config.ai_bot_profile or self.config.aiBotProfile or "train_only")
+            local lower_ua = string.lower(user_agent)
+            local is_train_bot = lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("cohere%-ai") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("mistralbot") or lower_ua:find("deepseekbot") or lower_ua:find("exabot") or lower_ua:find("metaphorbot") or lower_ua:find("cotalker") or lower_ua:find("petalbot")
+            local is_search_bot = lower_ua:find("perplexitybot") or lower_ua:find("perplexity%-search") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user") or lower_ua:find("grokbot") or lower_ua:find("twitterbot") or lower_ua:find("duckassistbot") or lower_ua:find("bingpreview")
+            local is_aggr_bot = lower_ua:find("bytespider") or lower_ua:find("claudebot") or lower_ua:find("ccbot") or lower_ua:find("diffbot") or lower_ua:find("petalbot")
+            local is_agent_bot = lower_ua:find("firecrawl") or lower_ua:find("apify") or lower_ua:find("zyte") or lower_ua:find("brightdata") or lower_ua:find("crawlbase") or lower_ua:find("scrapingbee") or lower_ua:find("octoparse") or lower_ua:find("autogpt") or lower_ua:find("langchain") or lower_ua:find("llamaindex") or lower_ua:find("agentgpt")
+
+            if profile == "all" then
+                if is_train_bot then
+                    ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_search_bot then
+                    ua_blocked = true; ua_pattern = "ai_search_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_aggr_bot then
+                    ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "aggressive" then
+                if is_aggr_bot then
+                    ua_blocked = true; ua_pattern = "ai_aggressive_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "train_only" then
+                if is_train_bot then
+                    ua_blocked = true; ua_pattern = "ai_training_bot"; ua_reason = "ai_bot_blocked"
+                elseif is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "search_only" then
+                if is_search_bot then
+                    ua_blocked = true; ua_pattern = "ai_search_bot"; ua_reason = "ai_bot_blocked"
+                end
+            elseif profile == "agents_only" then
+                if is_agent_bot then
+                    ua_blocked = true; ua_pattern = "ai_agent_bot"; ua_reason = "ai_bot_blocked"
+                end
+            end
+        end
+
+        if not ua_blocked and self.config.detect_browser_impersonation and user_agent ~= "" then
+            local is_spoofed, reason = detect_browser_impersonation(user_agent, headers)
+            if is_spoofed then
+                ua_blocked = true
+                ua_pattern = reason
+                ua_reason = "browser_spoofed"
+            end
+        end
+
+        if not ua_blocked and self.config.block_script_clients then
+            local is_script, client_type = detect_script_client(user_agent, headers)
+            if is_script then
+                ua_blocked = true
+                ua_pattern = client_type
+                ua_reason = "script_client_blocked"
+            end
+        end
+
+        if ua_blocked then
+            if not is_pow_valid then
+                local block_info = {
+                    blocked = true,
+                    status_code = self.config.status_code or 403,
+                    reason = ua_reason,
+                    pattern = ua_pattern,
+                    matched_pattern = ua_pattern,
+                    target = user_agent,
+                    client_ip = client_ip,
+                    method = method,
+                    path = user_agent,
+                    request_uri = req_ctx.raw_uri or "",
+                    action = self.config.response and self.config.response.mode or "json",
+                    user_agent = user_agent
+                }
+                if self.config.security_log ~= false then
+                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                end
+                return false, block_info
+            end
+        end
+    end
+
     -- Stage 2: Path Normalization
     local raw_uri = req_ctx.raw_uri or (ngx and ngx.var and ngx.var.request_uri) or ""
     local uri = req_ctx.uri or (ngx and ngx.var and ngx.var.uri) or "/"
     local candidate_paths = normalizer.extract_candidate_paths(raw_uri, uri, raw_uri)
 
+    -- Stage 2b: Honeypot Spider Trap Check (static and dynamic robots.txt traps)
+    local active_traps = {}
+    if self.config.honeypot_trap_paths and #self.config.honeypot_trap_paths > 0 then
+        for _, tp in ipairs(self.config.honeypot_trap_paths) do
+            active_traps[#active_traps + 1] = tp
+        end
+    end
+    if self.config.enable_robots_txt_honeypot then
+        local _, dyn_prefixes = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+        for _, pfx in ipairs(dyn_prefixes) do
+            active_traps[#active_traps + 1] = pfx
+        end
+    end
+
+    if #active_traps > 0 then
+        local trap_triggered = false
+        local matched_trap = ""
+        local matched_path = ""
+        for _, path_cand in ipairs(candidate_paths) do
+            for _, trap_path in ipairs(active_traps) do
+                local clean_trap = string.match(trap_path, "^%s*(.-)%s*$")
+                if clean_trap ~= "" then
+                    if string.sub(clean_trap, 1, 1) ~= "/" then
+                        clean_trap = "/" .. clean_trap
+                    end
+                    local base_trap = string.gsub(clean_trap, "/+$", "")
+                    if base_trap ~= "" then
+                        local prefix_trap = base_trap .. "/"
+                        local lower_cand = string.lower(path_cand)
+                        local lower_base = string.lower(base_trap)
+                        local lower_prefix = string.lower(prefix_trap)
+                        if lower_cand == lower_base or string.sub(lower_cand, 1, #lower_prefix) == lower_prefix then
+                            trap_triggered = true
+                            matched_trap = clean_trap
+                            matched_path = path_cand
+                            break
+                        end
+                    end
+                end
+            end
+            if trap_triggered then break end
+        end
+
+        if trap_triggered then
+            local ban_until = os.time() + self.parsed_ban_duration
+            if self.ban_table then
+                self.ban_table[norm_ip] = ban_until
+            end
+            local shared_bans = (ngx and ngx.shared and ngx.shared.routewarden_bans) or nil
+            if shared_bans then
+                shared_bans:set(norm_ip, ban_until, self.parsed_ban_duration)
+            end
+            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+            local block_info = {
+                blocked = true,
+                status_code = self.config.status_code or 403,
+                reason = "honeypot_trap_triggered",
+                pattern = matched_trap,
+                matched_pattern = matched_trap,
+                target = matched_path,
+                client_ip = client_ip,
+                method = method,
+                path = matched_path,
+                request_uri = req_ctx.raw_uri or "",
+                action = self.config.response and self.config.response.mode or "json",
+                user_agent = user_agent
+            }
+            if self.config.security_log ~= false then
+                logger.log_security_event(block_info, true, self.custom_log_sink)
+            end
+            return false, block_info
+        end
+    end
+
     -- Stage 3: Allow Patterns Match (Precedence over blocklist)
     for _, path_cand in ipairs(candidate_paths) do
         for _, allow_re in ipairs(self.compiled_allow) do
             if allow_re:match(path_cand) then
+                if self.config.enable_robots_txt_honeypot and robots_honeypot.is_robots_txt_path(path_cand) and (method == "GET" or method == "HEAD") then
+                    local active_trap = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+                    local injected = robots_honeypot.inject_robots_txt_trap(req_ctx.body or req_ctx.existing_robots_txt, active_trap)
+                    req_ctx.injected_robots_txt = injected
+                    return true, { injected_robots_txt = injected }
+                end
                 return true
+            end
+        end
+    end
+
+    -- Datacenter & Cloud Hosting IP Classifier
+    if not ua_allowed and self.config.block_cloud_hosts and self.asn_matcher then
+        local is_cloud, cloud_asn, provider = self.asn_matcher:is_cloud_host(norm_ip)
+        if is_cloud then
+            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+            local lower_ua = string.lower(user_agent)
+            local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+            local reason = "cloud_host_blocked"
+            if is_browser then
+                reason = "datacenter_browser_impersonation"
+            end
+            local matched_pattern = string.format("AS%d (%s)", cloud_asn, provider)
+            if not is_pow_valid then
+                local block_info = {
+                    blocked = true,
+                    status_code = self.config.status_code or 403,
+                    reason = reason,
+                    pattern = matched_pattern,
+                    matched_pattern = matched_pattern,
+                    target = norm_ip,
+                    client_ip = client_ip,
+                    method = method,
+                    path = norm_ip,
+                    request_uri = req_ctx.raw_uri or "",
+                    action = self.config.response and self.config.response.mode or "json",
+                    user_agent = user_agent
+                }
+                if self.config.security_log ~= false then
+                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                end
+                return false, block_info
             end
         end
     end
@@ -917,33 +1808,48 @@ function _M:inspect(req_ctx)
 
             for _, raw_v in ipairs(raw_vals) do
                 local val_str = tostring(raw_v)
-                if val_str ~= "" then
-                    local header_candidates = { val_str }
-                    for _, hc in ipairs(normalizer.extract_candidate_paths(val_str, val_str, val_str)) do
-                        table.insert(header_candidates, hc)
+                local trimmed_val = string.match(val_str, "^%s*(.-)%s*$")
+                if trimmed_val and trimmed_val ~= "" then
+                    local header_vals = { trimmed_val }
+                    local unquoted = string.match(trimmed_val, '^["\'](.-)["\']$')
+                    if unquoted and unquoted ~= "" and unquoted ~= trimmed_val then
+                        local trimmed_unquoted = string.match(unquoted, "^%s*(.-)%s*$")
+                        if trimmed_unquoted ~= "" then
+                            table.insert(header_vals, trimmed_unquoted)
+                        end
                     end
                     -- Also handle comma-separated values in headers
-                    if string.find(val_str, ",", 1, true) then
-                        for part in string.gmatch(val_str, "[^,]+") do
+                    if string.find(trimmed_val, ",", 1, true) then
+                        for part in string.gmatch(trimmed_val, "[^,]+") do
                             local trimmed_part = string.match(part, "^%s*(.-)%s*$")
-                            if trimmed_part ~= "" and trimmed_part ~= val_str then
-                                table.insert(header_candidates, trimmed_part)
-                                for _, hc in ipairs(normalizer.extract_candidate_paths(trimmed_part, trimmed_part, trimmed_part)) do
-                                    table.insert(header_candidates, hc)
+                            if trimmed_part and trimmed_part ~= "" then
+                                local unq_part = string.match(trimmed_part, '^["\'](.-)["\']$')
+                                if unq_part and unq_part ~= "" then
+                                    trimmed_part = string.match(unq_part, "^%s*(.-)%s*$")
+                                end
+                                if trimmed_part ~= "" then
+                                    table.insert(header_vals, trimmed_part)
                                 end
                             end
                         end
                     end
 
-                    for _, hc in ipairs(header_candidates) do
-                        for _, block_re in ipairs(self.compiled_block) do
-                            if block_re:match(hc) then
-                                is_blocked = true
-                                blocked_pattern = block_re.pattern
-                                blocked_target = val_str
-                                blocked_reason = "header_blocked"
-                                break
+                    for _, hv in ipairs(header_vals) do
+                        local header_candidates = { hv }
+                        for _, hc in ipairs(normalizer.extract_candidate_paths(hv, hv, hv)) do
+                            table.insert(header_candidates, hc)
+                        end
+                        for _, hc in ipairs(header_candidates) do
+                            for _, block_re in ipairs(self.compiled_block) do
+                                if block_re:match(hc) then
+                                    is_blocked = true
+                                    blocked_pattern = block_re.pattern
+                                    blocked_target = val_str
+                                    blocked_reason = "header_blocked"
+                                    break
+                                end
                             end
+                            if is_blocked then break end
                         end
                         if is_blocked then break end
                     end
@@ -986,6 +1892,44 @@ function _M:inspect(req_ctx)
                 table.insert(body_candidates, unescaped_body)
             end
 
+            -- Form urlencoded parameters extraction (&, ;)
+            local query_cands = normalizer.extract_query_candidates(body_data)
+            if query_cands and #query_cands > 0 then
+                for _, qc in ipairs(query_cands) do
+                    table.insert(body_candidates, qc)
+                end
+            end
+
+            -- JSON payload extraction
+            local trimmed_body = string.match(body_data, "^%s*(.-)%s*$")
+            if trimmed_body and ((string.sub(trimmed_body, 1, 1) == "{" and string.sub(trimmed_body, -1) == "}") or
+               (string.sub(trimmed_body, 1, 1) == "[" and string.sub(trimmed_body, -1) == "]")) then
+                local json_data, _ = parse_json(trimmed_body)
+                if json_data and type(json_data) == "table" then
+                    local function extract_json(val)
+                        if type(val) == "string" then
+                            table.insert(body_candidates, val)
+                            local cands = normalizer.extract_candidate_paths(val, val, val)
+                            for _, c in ipairs(cands) do
+                                table.insert(body_candidates, c)
+                            end
+                        elseif type(val) == "table" then
+                            for k, v in pairs(val) do
+                                if type(k) == "string" then
+                                    table.insert(body_candidates, k)
+                                    local cands = normalizer.extract_candidate_paths(k, k, k)
+                                    for _, c in ipairs(cands) do
+                                        table.insert(body_candidates, c)
+                                    end
+                                end
+                                extract_json(v)
+                            end
+                        end
+                    end
+                    extract_json(json_data)
+                end
+            end
+
             local patterns_to_check = self.compiled_body
             if not patterns_to_check or #patterns_to_check == 0 then
                 patterns_to_check = self.compiled_block
@@ -1007,6 +1951,17 @@ function _M:inspect(req_ctx)
     end
 
     if is_blocked then
+        if is_pow_valid then
+            return true, {
+                allowed = true,
+                pow_verified = true,
+                reason = "pow_verified",
+                client_ip = client_ip,
+                method = method,
+                path = blocked_target,
+                request_uri = raw_uri
+            }
+        end
         local action_mode = self.config.response.mode
         local status_code = 403
         if self.response_handler and self.response_handler.silent_drop then
@@ -1035,6 +1990,17 @@ function _M:inspect(req_ctx)
         end
 
         return false, block_info
+    end
+
+    if self.config.enable_robots_txt_honeypot and (method == "GET" or method == "HEAD") then
+        for _, path_cand in ipairs(candidate_paths) do
+            if robots_honeypot.is_robots_txt_path(path_cand) then
+                local active_trap = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+                local injected = robots_honeypot.inject_robots_txt_trap(req_ctx.body or req_ctx.existing_robots_txt, active_trap)
+                req_ctx.injected_robots_txt = injected
+                return true, { injected_robots_txt = injected }
+            end
+        end
     end
 
     return true
@@ -1066,6 +2032,19 @@ function _M:check(req_ctx)
     local passed, block_info = self:inspect(ctx)
     if not passed then
         return self.response_handler:serve(ctx)
+    end
+
+    if self.config.enable_robots_txt_honeypot and ctx.injected_robots_txt then
+        if ctx.respond then
+            ctx.respond(200, "text/plain; charset=utf-8", ctx.injected_robots_txt)
+            return
+        end
+        if ngx and ngx.say and ngx.exit then
+            ngx.header["Content-Type"] = "text/plain; charset=utf-8"
+            ngx.status = 200
+            ngx.say(ctx.injected_robots_txt)
+            return ngx.exit(ngx.HTTP_OK)
+        end
     end
 end
 

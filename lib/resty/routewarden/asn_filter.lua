@@ -11,20 +11,41 @@ local function parse_asn(value)
     return number
 end
 
-function M.new(allowed, path, decode)
-    local self = setmetatable({ allowed = {}, roots = {} }, { __index = M })
-    if allowed == nil then return self end
-    if type(allowed) ~= 'table' then return nil, 'allowed_asns must be an array' end
-    if next(allowed) == nil then return self end
-    for key, value in pairs(allowed) do
-        if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #allowed then
-            return nil, 'allowed_asns must be an array'
+function M.new(allowed, path, decode, blocked, block_cloud_hosts)
+    local self = setmetatable({ allowed = {}, blocked = {}, roots = {} }, { __index = M })
+    local has_allowed = false
+    local has_blocked = false
+    local should_block_cloud = block_cloud_hosts == true
+
+    if allowed ~= nil then
+        if type(allowed) ~= 'table' then return nil, 'allowed_asns must be an array' end
+        for key, value in pairs(allowed) do
+            if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #allowed then
+                return nil, 'allowed_asns must be an array'
+            end
+            local number = parse_asn(value)
+            if not number then return nil, 'invalid ASN: ' .. tostring(value) end
+            self.allowed[number] = true
+            has_allowed = true
         end
-        local number = parse_asn(value)
-        if not number then return nil, 'invalid ASN: ' .. tostring(value) end
-        self.allowed[number] = true
     end
-    if type(path) ~= 'string' or path == '' then return nil, 'asn_db required with allowed_asns' end
+
+    if blocked ~= nil then
+        if type(blocked) ~= 'table' then return nil, 'blocked_asns must be an array' end
+        for key, value in pairs(blocked) do
+            if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #blocked then
+                return nil, 'blocked_asns must be an array'
+            end
+            local number = parse_asn(value)
+            if not number then return nil, 'invalid ASN: ' .. tostring(value) end
+            self.blocked[number] = true
+            has_blocked = true
+        end
+    end
+
+    if not has_allowed and not has_blocked and not should_block_cloud then return self end
+
+    if type(path) ~= 'string' or path == '' then return nil, 'asn_db required with allowed_asns or blocked_asns' end
     local file, err = io.open(path, 'r')
     if not file then return nil, 'ASN database: ' .. tostring(err) end
     local content = file:read('*a')
@@ -64,12 +85,15 @@ function M.new(allowed, path, decode)
     for number in pairs(self.allowed) do
         if not found[number] then return nil, 'ASN has no prefixes in database: ' .. tostring(number) end
     end
+    for number in pairs(self.blocked) do
+        if not found[number] then return nil, 'ASN has no prefixes in database: ' .. tostring(number) end
+    end
     return self
 end
 
-function M:is_allowed(ip)
+function M:lookup(ip)
     local bytes = ip_filter.address_bytes(ip)
-    if not bytes then return false end
+    if not bytes then return nil end
     local node = self.roots[#bytes]
     local number
     for i = 0, #bytes * 8 do
@@ -79,6 +103,48 @@ function M:is_allowed(ip)
         local byte = bytes[math.floor(i / 8) + 1]
         node = node[math.floor(byte / 2 ^ (7 - i % 8)) % 2]
     end
-    return self.allowed[number] == true
+    return number
 end
+
+function M:is_allowed(ip)
+    local number = self:lookup(ip)
+    return number ~= nil and self.allowed[number] == true
+end
+
+function M:is_blocked(ip)
+    local number = self:lookup(ip)
+    if number ~= nil and self.blocked[number] == true then
+        return true, number
+    end
+    return false, nil
+end
+
+M.default_cloud_asns = {
+    [16509] = "AWS",
+    [14618] = "AWS",
+    [15169] = "Google Cloud",
+    [396982] = "Google Cloud",
+    [8075] = "Microsoft Azure",
+    [8074] = "Microsoft Azure",
+    [24940] = "Hetzner",
+    [14061] = "DigitalOcean",
+    [16276] = "OVH",
+    [63949] = "Linode/Akamai",
+    [138699] = "ByteDance",
+    [137718] = "ByteDance",
+    [31898] = "Oracle Cloud",
+    [132203] = "Tencent Cloud",
+    [45102] = "Alibaba Cloud",
+}
+
+function M:is_cloud_host(ip)
+    local number = self:lookup(ip)
+    if not number then return false, nil, nil end
+    local provider = M.default_cloud_asns[number]
+    if provider then
+        return true, number, provider
+    end
+    return false, nil, nil
+end
+
 return M

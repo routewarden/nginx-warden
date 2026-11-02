@@ -177,11 +177,31 @@ do
     assert(passed == false)
     assert(logged_payload ~= nil, "Security log event should be emitted")
     assert(logged_payload.type == "routewarden_block")
+    assert(logged_payload.verdict == "BLOCK", "default json block verdict should be BLOCK")
     assert(logged_payload.plugin == "nginx-warden")
     assert(logged_payload.client_ip == "198.51.100.25")
     assert(logged_payload.user_agent == "ScannerBot/1.0")
     assert(logged_payload.action == "json")
-    print("  ✓ CrowdSec-compatible security log event emitted")
+
+    -- Test tarpit verdict mapping
+    local rw_tarpit = routewarden.new({ response = { mode = "tarpit" } })
+    rw_tarpit:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_tarpit, "GET", "/.env")
+    assert(logged_payload.verdict == "TARPIT", "tarpit mode verdict should be TARPIT")
+
+    -- Test markov_tarpit verdict mapping
+    local rw_markov = routewarden.new({ response = { mode = "markov_tarpit" } })
+    rw_markov:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_markov, "GET", "/.env")
+    assert(logged_payload.verdict == "TARPIT", "markov_tarpit mode verdict should be TARPIT")
+
+    -- Test captcha challenge verdict mapping
+    local rw_captcha = routewarden.new({ response = { mode = "captcha" } })
+    rw_captcha:set_log_sink(function(json_str, payload) logged_payload = payload end)
+    simulate_request(rw_captcha, "GET", "/.env")
+    assert(logged_payload.verdict == "CHALLENGE", "captcha mode verdict should be CHALLENGE")
+
+    print("  ✓ CrowdSec-compatible security log event emitted with verdict")
 end
 
 -- 13. Disabled module bypass
@@ -201,7 +221,12 @@ do
         "/Dockerfile",
         "/docker-compose.yml",
         "/.DS_Store",
-        "/wp-config.php"
+        "/wp-config.php",
+        "/wp-config.php::$DATA",
+        "/settings.py.",
+        "/server.key%20",
+        "/database.sqlite3::$data",
+        "/sub./.env"
     }
     for _, p in ipairs(sensitive_paths) do
         local passed = simulate_request(rw, "GET", p)
@@ -728,7 +753,923 @@ do
     })
     assert(passed == false, "query string with sensitive key .env must be blocked")
     assert(block_info.reason == "query_blocked", "reason must be query_blocked")
-    print("  ✓ sensitive query parameter keys blocked when check_query enabled")
+
+    local passed_semi, block_semi = rw:inspect({
+        method = "GET",
+        uri = "/search",
+        raw_uri = "/search?safe=1;file=.env",
+        query_string = "safe=1;file=.env"
+    })
+    assert(passed_semi == false, "query string with semicolon delimiter must be blocked")
+
+    local passed_enc, block_enc = rw:inspect({
+        method = "GET",
+        uri = "/search",
+        raw_uri = "/search?safe=1%26file=.env",
+        query_string = "safe=1%26file=.env"
+    })
+    assert(passed_enc == false, "query string with encoded ampersand must be blocked")
+
+    print("  ✓ sensitive query parameter keys and encoded delimiters blocked when check_query enabled")
+end
+
+-- 46. AI Bot and User-Agent Blocking
+do
+    local routewarden = require("resty.routewarden")
+    -- Test train_only profile
+    local rw_train = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "train_only",
+        security_log = false
+    })
+    local pass_norm, _ = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0" }
+    })
+    assert(pass_norm == true, "Normal user-agent must be allowed")
+
+    local pass_gpt, b_gpt = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt == false, "GPTBot must be blocked under train_only")
+    assert(b_gpt.reason == "ai_bot_blocked")
+    assert(b_gpt.pattern == "ai_training_bot")
+
+    local pass_perp, _ = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp == true, "PerplexityBot must be allowed under train_only profile")
+
+    -- Test new 2026 crawlers under train_only: MistralBot, DeepSeekBot
+    local pass_mistral, b_mistral = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "MistralBot/1.0" }
+    })
+    assert(pass_mistral == false, "MistralBot must be blocked under train_only")
+    assert(b_mistral.pattern == "ai_training_bot")
+
+    local pass_deepseek, b_deepseek = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; DeepSeekBot/1.0; +https://www.deepseek.com)" }
+    })
+    assert(pass_deepseek == false, "DeepSeekBot must be blocked under train_only")
+    assert(b_deepseek.pattern == "ai_training_bot")
+
+    -- Test 'search_only' profile
+    local rw_search = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "search_only",
+        security_log = false
+    })
+    local pass_search_perp, b_search_perp = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_search_perp == false, "PerplexityBot must be blocked under search_only")
+    assert(b_search_perp.pattern == "ai_search_bot")
+
+    local pass_search_grok, b_search_grok = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GrokBot/1.0)" }
+    })
+    assert(pass_search_grok == false, "GrokBot must be blocked under search_only")
+    assert(b_search_grok.pattern == "ai_search_bot")
+
+    local pass_search_gpt = rw_search:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_search_gpt == true, "GPTBot must be allowed under search_only")
+
+    -- Test 'agents_only' profile
+    local rw_agents = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "agents_only",
+        security_log = false
+    })
+    local pass_agents_firecrawl, b_agents_firecrawl = rw_agents:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Firecrawl/1.0 (+https://firecrawl.dev)" }
+    })
+    assert(pass_agents_firecrawl == false, "Firecrawl must be blocked under agents_only")
+    assert(b_agents_firecrawl.pattern == "ai_agent_bot")
+
+    local pass_agents_gpt = rw_agents:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_agents_gpt == true, "GPTBot must be allowed under agents_only")
+
+    -- Test 'all' profile
+    local rw_all = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "all",
+        security_log = false
+    })
+    local pass_perp_all, b_perp_all = rw_all:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp_all == false, "PerplexityBot must be blocked under 'all' profile")
+    assert(b_perp_all.pattern == "ai_search_bot")
+
+    local pass_fb, b_fb = rw_train:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php FacebookBot)" }
+    })
+    assert(pass_fb == false, "FacebookBot must be blocked under train_only")
+    assert(b_fb.pattern == "ai_training_bot")
+
+    -- Test 'aggressive' profile
+    local rw_aggr = routewarden.new({
+        block_ai_bots = true,
+        ai_bot_profile = "aggressive",
+        security_log = false
+    })
+    local pass_diff, b_diff = rw_aggr:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Diffbot/0.1; (+http://www.diffbot.com)" }
+    })
+    assert(pass_diff == false, "Diffbot must be blocked under aggressive profile")
+    assert(b_diff.pattern == "ai_aggressive_bot")
+
+    -- Test custom block_user_agents and allow_user_agents
+    local rw_custom = routewarden.new({
+        block_ai_bots = true,
+        block_user_agents = { "(?i)scrappy-scraper", "(?i)malicious-probe" },
+        allow_user_agents = { "(?i)partner-gptbot" },
+        security_log = false
+    })
+    local pass_scrappy, b_scrappy = rw_custom:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Scrappy-Scraper/1.0" }
+    })
+    assert(pass_scrappy == false, "Scrappy-Scraper must be blocked")
+    assert(b_scrappy.reason == "user_agent_blocked")
+
+    local pass_partner, _ = rw_custom:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        headers = { ["user-agent"] = "Partner-GPTBot/2.0 (compatible; GPTBot/1.0)" }
+    })
+    assert(pass_partner == true, "allow_user_agents must bypass AI bot blocking")
+    print("  ✓ AI bot and User-Agent blocking verified")
+end
+
+-- 47. Honeypot Spider Traps & In-Memory Ban Table
+do
+    local rw_trap = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "/hidden-spider-trap", "/crawler-trap/" },
+        trap_ban_duration = "1h",
+        security_log = false
+    })
+
+    local client_ip = "198.51.100.77"
+    local other_ip = "203.0.113.88"
+
+    -- 1. Legitimate request passes
+    local pass_legit, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = client_ip
+    })
+    assert(pass_legit == true, "initial legitimate request must pass")
+
+    -- 2. Crawler trips honeypot trap
+    local pass_trap, b_trap = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap",
+        remote_addr = client_ip
+    })
+    assert(pass_trap == false, "honeypot trap hit must be blocked")
+    assert(b_trap.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 3. Subsequent request to legitimate path is blocked due to active ban
+    local pass_banned, b_banned = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = client_ip
+    })
+    assert(pass_banned == false, "subsequent request must be blocked by active ban table")
+    assert(b_banned.reason == "ip_banned", "reason must be ip_banned")
+
+    -- 3b. Subsequent request via dual-stack IPv4-mapped IPv6 with port is also blocked
+    local pass_mapped, b_mapped = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = "[::ffff:" .. client_ip .. "]:45678"
+    })
+    assert(pass_mapped == false, "subsequent request via IPv4-mapped IPv6 must be blocked by ban table")
+    assert(b_mapped.reason == "ip_banned", "reason must be ip_banned for IPv4-mapped IPv6")
+
+    -- 4. Different IP is not banned
+    local pass_other, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = other_ip
+    })
+    assert(pass_other == true, "unbanned client IP must pass")
+
+    -- 5. Subpath of trap without trailing slash (/hidden-spider-trap/deep/link) triggers trap
+    local client_sub = "198.51.100.88"
+    local pass_sub, b_sub = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap/deep/link",
+        remote_addr = client_sub
+    })
+    assert(pass_sub == false, "subpath trap hit must be blocked")
+    assert(b_sub.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered for subpath")
+
+    -- 6. Non-trap prefix collision path (/hidden-spider-trapdoor) must pass
+    local client_prefix = "198.51.100.89"
+    local pass_prefix, _ = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trapdoor",
+        remote_addr = client_prefix
+    })
+    assert(pass_prefix == true, "prefix-collision path /hidden-spider-trapdoor must pass")
+
+    -- 7. Bracketed IPv6 honeypot ban normalization
+    local client_ipv6 = "[2001:db8::99]"
+    local pass_v6_trap, b_v6_trap = rw_trap:inspect({
+        method = "GET",
+        uri = "/hidden-spider-trap",
+        remote_addr = client_ipv6
+    })
+    assert(pass_v6_trap == false, "bracketed IPv6 trap hit must trigger")
+    assert(b_v6_trap.reason == "honeypot_trap_triggered")
+
+    -- Subsequent request from unbracketed IPv6 must be banned
+    local pass_v6_banned, b_v6_banned = rw_trap:inspect({
+        method = "GET",
+        uri = "/public/index.html",
+        remote_addr = "2001:db8::99"
+    })
+    assert(pass_v6_banned == false, "subsequent request from unbracketed IPv6 must be banned")
+    assert(b_v6_banned.reason == "ip_banned")
+
+    -- 8. Honeypot trap configured WITHOUT leading slash (e.g. "no-slash-trap")
+    local rw_no_slash = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "no-slash-trap" },
+        trap_ban_duration = "1h"
+    })
+    local pass_no_slash, b_no_slash = rw_no_slash:inspect({
+        method = "GET",
+        uri = "/no-slash-trap",
+        remote_addr = "198.51.100.95"
+    })
+    assert(pass_no_slash == false, "trap path configured without leading slash must trigger")
+    assert(b_no_slash.reason == "honeypot_trap_triggered")
+
+    -- 9. Case-insensitive matching: uppercase/mixed-case requests must trigger trap
+    local pass_case1, b_case1 = rw_trap:inspect({
+        method = "GET",
+        uri = "/HIDDEN-SPIDER-TRAP",
+        remote_addr = "198.51.100.96"
+    })
+    assert(pass_case1 == false, "uppercase /HIDDEN-SPIDER-TRAP must trigger trap")
+    assert(b_case1.reason == "honeypot_trap_triggered")
+
+    local pass_case2, b_case2 = rw_trap:inspect({
+        method = "GET",
+        uri = "/Crawler-Trap/Deep/Link",
+        remote_addr = "198.51.100.97"
+    })
+    assert(pass_case2 == false, "mixed-case /Crawler-Trap/Deep/Link must trigger trap")
+    assert(b_case2.reason == "honeypot_trap_triggered")
+
+    -- 10. Root honeypot trap safeguard: "/" must be ignored and not block root
+    local rw_root = routewarden.new({
+        enable_default_patterns = false,
+        honeypot_trap_paths = { "/", "   " },
+        trap_ban_duration = "1h"
+    })
+    local pass_root, _ = rw_root:inspect({
+        method = "GET",
+        uri = "/",
+        remote_addr = "198.51.100.98"
+    })
+    assert(pass_root == true, "root request must pass through when honeypot_trap_paths contains '/'")
+
+    print("  ✓ Honeypot spider traps and in-memory ban table verified")
+end
+
+-- 48. Search Engine Impersonation Detection (FCrDNS)
+do
+    local rw_fcrdns = routewarden.new({
+        enable_default_patterns = false,
+        verify_search_engine_bots = true,
+        block_ai_bots = true,
+        security_log = false
+    })
+
+    -- Mock verifier
+    rw_fcrdns:set_fcrdns_verifier(function(ip, engine)
+        if ip == "66.249.66.1" and engine == "google" then
+            return true
+        end
+        return false
+    end)
+
+    -- 1. Legitimate Googlebot passes
+    local pass_legit, _ = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "66.249.66.1",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }
+    })
+    assert(pass_legit == true, "genuine Googlebot must pass FCrDNS check")
+
+    -- 2. Spoofed Googlebot from attacker IP is blocked
+    local pass_spoof, b_spoof = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "198.51.100.99",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }
+    })
+    assert(pass_spoof == false, "spoofed Googlebot must fail FCrDNS check")
+    assert(b_spoof.reason == "search_engine_spoofed", "reason must be search_engine_spoofed")
+    assert(b_spoof.pattern == "google_spoofed", "pattern must be google_spoofed")
+
+    -- 3. Normal user passes
+    local pass_user, _ = rw_fcrdns:inspect({
+        method = "GET",
+        uri = "/articles/news",
+        remote_addr = "198.51.100.99",
+        headers = { ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0" }
+    })
+    assert(pass_user == true, "normal browser user must pass without FCrDNS check")
+    print("  ✓ Search engine impersonation detection (FCrDNS) verified")
+end
+
+-- 49. Browser Impersonation & Script Client Detection
+do
+    local rw_fingerprint = routewarden.new({
+        enable_default_patterns = false,
+        detect_browser_impersonation = true,
+        block_script_clients = true,
+        security_log = false
+    })
+
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+    -- 1. Spoofed Chrome (missing Accept-Language) -> blocked
+    local pass_spoof, b_spoof = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-encoding"] = "gzip, deflate, br"
+        }
+    })
+    assert(pass_spoof == false, "spoofed Chrome without Accept-Language must be blocked")
+    assert(b_spoof.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_spoof.pattern == "missing_accept_language", "pattern must be missing_accept_language")
+
+    -- 2. Platform mismatch: Windows UA but Linux in Sec-CH-UA-Platform
+    local pass_plat, b_plat = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Linux"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_plat == false, "platform mismatch must be blocked")
+    assert(b_plat.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_plat.pattern == "sec_ch_ua_platform_mismatch", "pattern must be sec_ch_ua_platform_mismatch")
+
+    -- 3. Legitimate Chrome with all companion headers -> passed
+    local pass_legit, _ = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_legit == true, "legitimate Chrome must pass inspection")
+
+    -- 3b. Mobile mismatch: Desktop Windows UA with Sec-CH-UA-Mobile: ?1
+    local pass_mob, b_mob = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?1",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_mob == false, "mobile mismatch must be blocked")
+    assert(b_mob.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_mob.pattern == "sec_ch_ua_mobile_mismatch", "pattern must be sec_ch_ua_mobile_mismatch")
+
+    -- 3c. Missing Sec-CH-UA on modern Chrome with Sec-CH-UA-Platform
+    local pass_noch, b_noch = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_noch == false, "missing sec-ch-ua must be blocked")
+    assert(b_noch.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_noch.pattern == "missing_sec_ch_ua", "pattern must be missing_sec_ch_ua")
+
+    -- 3d. Missing GREASE brand in modern Chrome
+    local pass_nogrease, b_nogrease = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_nogrease == false, "missing GREASE brand must be blocked")
+    assert(b_nogrease.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_nogrease.pattern == "missing_grease_brand", "pattern must be missing_grease_brand")
+
+    -- 4. Script client (python-requests) -> blocked
+    local pass_script, b_script = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "python-requests/2.31.0"
+        }
+    })
+    assert(pass_script == false, "python-requests must be blocked")
+    assert(b_script.reason == "script_client_blocked", "reason must be script_client_blocked")
+
+    -- 5. Playwright headless header -> blocked
+    local pass_hw, b_hw = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document",
+            ["x-playwright"] = "true"
+        }
+    })
+    assert(pass_hw == false, "playwright header must be blocked")
+    assert(b_hw.reason == "script_client_blocked", "reason must be script_client_blocked")
+    print("  ✓ Browser impersonation and script client detection verified")
+end
+
+-- 50. Exported helper function tests
+do
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    assert(routewarden.detect_search_engine("Googlebot/2.1") == "google")
+    assert(routewarden.detect_search_engine("bingbot/2.0") == "bing")
+    assert(routewarden.detect_search_engine("Applebot/0.1") == "apple")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)") == "yandex")
+    assert(routewarden.detect_search_engine("Baiduspider+(+http://www.baidu.com/search/spider.htm)") == "baidu")
+    assert(routewarden.detect_search_engine("DuckDuckBot/1.1; (+http://duckduckgo.com/duckduckbot.html)") == "duckduckgo")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)") == "yahoo")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; Yeti/1.1; +http://naver.me/bot)") == "naver")
+    assert(routewarden.detect_search_engine("Sogou web spider/4.0(+http://www.sogou.com/docs/help/websearchhtm)") == "sogou")
+    assert(routewarden.detect_search_engine("Mozilla/5.0 (compatible; MojeekBot/0.11; http://www.mojeek.com/bot.html)") == "mojeek")
+    assert(routewarden.detect_search_engine("curl/7.68.0") == nil)
+
+    local is_script, name = routewarden.detect_script_client("python-requests/2.28.0", {})
+    assert(is_script == true and name == "python-requests")
+
+    local is_spoofed, reason = routewarden.detect_browser_impersonation("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0", {})
+    assert(is_spoofed == true and reason == "missing_accept_language")
+
+    local ok_order, ord_reason = routewarden.detect_browser_header_order({ "Host", "Sec-CH-UA", "User-Agent", "Accept" }, chrome_ua)
+    assert(ok_order == false, "canonical Chromium order should pass")
+
+    local bad_order_ua, ord_reason_ua = routewarden.detect_browser_header_order({ "Host", "User-Agent", "Sec-CH-UA", "Accept" }, chrome_ua)
+    assert(bad_order_ua == true and ord_reason_ua == "header_order_anomaly", "User-Agent before Sec-CH-UA should be flagged")
+
+    local bad_order_acc, ord_reason_acc = routewarden.detect_browser_header_order({ "Host", "Accept", "Sec-CH-UA", "User-Agent" }, chrome_ua)
+    assert(bad_order_acc == true and ord_reason_acc == "header_order_anomaly", "Accept before Sec-CH-UA should be flagged")
+    print("  ✓ Exported helper functions verified")
+end
+
+-- 51. bot_defense_level preset tests
+do
+    -- 1. Level: standard -> blocks GPTBot, python-requests, spoofed Chrome; allows search bot (PerplexityBot)
+    local rw_std = routewarden.new({ bot_defense_level = "standard" })
+    local pass_gpt, b_gpt = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt == false, "GPTBot should be blocked under standard level")
+    assert(b_gpt.reason == "ai_bot_blocked")
+
+    local pass_py, b_py = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "python-requests/2.31.0" }
+    })
+    assert(pass_py == false, "python-requests should be blocked under standard level")
+    assert(b_py.reason == "script_client_blocked")
+
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    local pass_spoofed, b_spoofed = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed == false, "spoofed Chrome should be blocked under standard level")
+    assert(b_spoofed.reason == "browser_spoofed")
+
+    local pass_perp = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp == true, "PerplexityBot should pass under standard level")
+
+    -- 2. Level: strict -> blocks search bot (PerplexityBot)
+    local rw_strict = routewarden.new({ bot_defense_level = "strict" })
+    local pass_perp_strict, b_perp_strict = rw_strict:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)" }
+    })
+    assert(pass_perp_strict == false, "PerplexityBot should be blocked under strict level")
+    assert(b_perp_strict.reason == "ai_bot_blocked")
+
+    -- 3. Level: light -> allows spoofed Chrome, blocks python-requests
+    local rw_light = routewarden.new({ bot_defense_level = "light" })
+    local pass_spoofed_light = rw_light:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed_light == true, "spoofed Chrome should pass under light level")
+
+    local pass_py_light, b_py_light = rw_light:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "python-requests/2.31.0" }
+    })
+    assert(pass_py_light == false, "python-requests should be blocked under light level")
+    assert(b_py_light.reason == "script_client_blocked")
+
+    -- 4. Level: standard with explicit override detect_browser_impersonation = false
+    local rw_override = routewarden.new({
+        bot_defense_level = "standard",
+        detect_browser_impersonation = false
+    })
+    local pass_spoofed_override = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = chrome_ua }
+    })
+    assert(pass_spoofed_override == true, "spoofed Chrome should pass with explicit override")
+
+    local pass_gpt_override = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 AppleWebKit/537.36 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+    })
+    assert(pass_gpt_override == false, "GPTBot should be blocked with standard level in override")
+
+    -- 5. Amazonbot and Anthropic AI bot defense tests
+    local pass_amz, b_amz = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Mozilla/5.0 (compatible; Amazonbot/0.1; +https://developer.amazon.com/support/amazonbot)" }
+    })
+    assert(pass_amz == false, "Amazonbot should be blocked under standard level")
+    assert(b_amz.reason == "ai_bot_blocked")
+
+    local pass_anth, b_anth = rw_std:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = { ["user-agent"] = "Anthropic/1.0" }
+    })
+    assert(pass_anth == false, "Anthropic/1.0 should be blocked under standard level")
+    assert(b_anth.reason == "ai_bot_blocked")
+
+    -- 6. Case-insensitive and multi-value table header tests
+    local pass_pw, b_pw = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+            ["X-Playwright"] = "true"
+        }
+    })
+    assert(pass_pw == false, "Mixed-case X-Playwright should be blocked")
+    assert(b_pw.reason == "script_client_blocked")
+
+    -- Multi-value table header safety in OpenResty
+    local pass_table_hdr = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+            ["Accept-Language"] = { "en-US", "en;q=0.9" },
+            ["Accept-Encoding"] = { "gzip", "deflate" },
+            ["Sec-Ch-Ua-Platform"] = { [["Windows"]] }
+        }
+    })
+    assert(pass_table_hdr == true, "Multi-value table headers should be safely parsed without error")
+
+    -- 7. Automated client with empty User-Agent and X-Playwright
+    local pass_empty_pw, b_empty_pw = rw_override:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["X-Playwright"] = "true"
+        }
+    })
+    assert(pass_empty_pw == false, "Empty UA with X-Playwright must be blocked")
+    assert(b_empty_pw.reason == "script_client_blocked")
+
+    -- 8. Custom block_user_agents with ^$ matching empty User-Agent
+    local rw_empty_ua = routewarden.new({
+        enable_default_patterns = false,
+        block_user_agents = { "^$" }
+    })
+    local pass_empty_ua, b_empty_ua = rw_empty_ua:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {}
+    })
+    assert(pass_empty_ua == false, "Empty User-Agent must be blocked when ^$ is configured")
+    assert(b_empty_ua.reason == "user_agent_blocked")
+    print("  ✓ bot_defense_level preset tests passed successfully")
+end
+
+-- 51. check_body form & JSON unpacking with end-anchored patterns
+do
+    local rw_body = routewarden.new({
+        enable_default_patterns = false,
+        methods = { "POST" },
+        check_body = true,
+        block_patterns = { "(?i)%.key$" }
+    })
+
+    -- 1. Raw form string where payload contains .key in the middle:
+    -- "other=1&cert=server.key&final=ok"
+    local pass_form, b_form = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = "other=1&cert=server.key&final=ok"
+    })
+    assert(pass_form == false, "form parameter server.key must be extracted and blocked by end-anchored pattern")
+    assert(b_form.reason == "body_blocked")
+
+    -- 2. JSON payload where .key is a nested string value
+    local pass_json, b_json = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"config": {"private_key": "id_rsa.key"}, "status": "active"}'
+    })
+    assert(pass_json == false, "JSON nested string id_rsa.key must be extracted and blocked by end-anchored pattern")
+    assert(b_json.reason == "body_blocked")
+
+    -- 3. JSON payload with array of values
+    local pass_json_arr, b_json_arr = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"files": ["readme.txt", "secret.key"]}'
+    })
+    assert(pass_json_arr == false, "JSON array element secret.key must be extracted and blocked")
+    assert(b_json_arr.reason == "body_blocked")
+
+    -- 4. Clean body payload should pass
+    local pass_clean, _ = rw_body:inspect({
+        method = "POST",
+        uri = "/upload",
+        body = '{"files": ["readme.txt", "document.pdf"]}'
+    })
+    assert(pass_clean == true, "Clean JSON payload must pass")
+    print("  ✓ check_body form & JSON unpacking verified")
+
+    -- 5. Trailing slash matching test
+    local rw_trailing = routewarden.new({
+        enable_default_patterns = false,
+        block_patterns = { "(?i)^/admin/$" }
+    })
+    local p1, r1 = rw_trailing:inspect({ method = "GET", uri = "/admin/" })
+    assert(p1 == false and r1.reason == "path_blocked", "Expected /admin/ to be blocked by ^/admin/$")
+    local p2, r2 = rw_trailing:inspect({ method = "GET", uri = "/admin" })
+    assert(p2 == false and r2.reason == "path_blocked", "Expected /admin to be blocked by ^/admin/$ (candidate trailing slash)")
+    local p3, _ = rw_trailing:inspect({ method = "GET", uri = "/admin/users" })
+    assert(p3 == true, "Expected /admin/users to pass")
+    print("  ✓ trailing slash candidate path matching verified")
+
+    -- 6. Check headers whitespace and quotes unquoting
+    local rw_hdr_quotes = routewarden.new({
+        enable_default_patterns = true,
+        check_headers = { "X-Forwarded-Prefix", "X-Rewrite-URL" }
+    })
+    local hp1, hr1 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = "  /.env  " }
+    })
+    assert(hp1 == false and hr1.reason == "header_blocked", "Expected header with whitespace to be blocked")
+
+    local hp2, hr2 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '"/wp-config.php"' }
+    })
+    assert(hp2 == false and hr2.reason == "header_blocked", "Expected double-quoted header to be blocked")
+
+    local hp3, hr3 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-rewrite-url"] = "'/.env'" }
+    })
+    assert(hp3 == false and hr3.reason == "header_blocked", "Expected single-quoted header to be blocked")
+
+    local hp4, hr4 = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '" /safe ", " /.env "' }
+    })
+    assert(hp4 == false and hr4.reason == "header_blocked", "Expected comma-separated quoted header to be blocked")
+
+    local hp5, _ = rw_hdr_quotes:inspect({
+        method = "GET",
+        uri = "/public",
+        headers = { ["x-forwarded-prefix"] = '"/dashboard"' }
+    })
+    assert(hp5 == true, "Expected safe header to pass")
+    print("  ✓ check_headers whitespace and quote unquoting verified")
+
+    -- 7. Encoded delimiters and whitespace evasion tests
+    local rw_delims = routewarden.new({
+        enable_default_patterns = true
+    })
+
+    local dp1, dr1 = rw_delims:inspect({ method = "GET", uri = "/backup.sql%3fparam=value" })
+    assert(dp1 == false and dr1.reason == "path_blocked", "Expected /backup.sql%3fparam=value to be blocked")
+
+    local dp2, dr2 = rw_delims:inspect({ method = "GET", uri = "/database.sql%23section" })
+    assert(dp2 == false and dr2.reason == "path_blocked", "Expected /database.sql%23section to be blocked")
+
+    local dp3, dr3 = rw_delims:inspect({ method = "GET", uri = "/server.key%3ffoo%23bar" })
+    assert(dp3 == false and dr3.reason == "path_blocked", "Expected /server.key%3ffoo%23bar to be blocked")
+
+    local dp4, dr4 = rw_delims:inspect({ method = "GET", uri = "/.env%0d" })
+    assert(dp4 == false and dr4.reason == "path_blocked", "Expected /.env%0d to be blocked")
+
+    local dp5, dr5 = rw_delims:inspect({ method = "GET", uri = "/.env%0a" })
+    assert(dp5 == false and dr5.reason == "path_blocked", "Expected /.env%0a to be blocked")
+
+    local dp6, dr6 = rw_delims:inspect({ method = "GET", uri = "/.env%09" })
+    assert(dp6 == false and dr6.reason == "path_blocked", "Expected /.env%09 to be blocked")
+
+    local dp7, _ = rw_delims:inspect({ method = "GET", uri = "/index.html" })
+    assert(dp7 == true, "Expected clean request /index.html to pass")
+    print("  ✓ encoded delimiters (%3f, %23) and whitespace (%0d, %0a, %09) evasion verified")
+end
+
+do
+    -- Robots.txt dynamic honeypot token, injection, and crawler trapping tests
+    local hp = require("resty.routewarden.robots_honeypot")
+    local fixed_ts = 1793577600 -- 2026-11-02
+    local token1 = hp.get_robots_honeypot_token("secret123", fixed_ts)
+    local token2 = hp.get_robots_honeypot_token("secret123", fixed_ts)
+    assert(token1 == token2, "Token must be deterministic")
+    assert(#token1 == 12, "Token must be 12 characters")
+    assert(token1 == "6d8f8f44e487", "Expected exact 12-char HMAC token 6d8f8f44e487")
+
+    local active_trap, valid_prefixes = hp.get_active_robots_honeypot_traps("nginx-test-secret", os.time())
+    assert(string.sub(active_trap, 1, 10) == "/_rw_trap_", "Active trap must start with /_rw_trap_")
+    assert(string.sub(active_trap, -1) == "/", "Active trap must end with /")
+    assert(#valid_prefixes == 2, "Must return today and yesterday prefixes")
+
+    local rw_robots = routewarden.new({
+        enabled = true,
+        enable_robots_txt_honeypot = true,
+        robots_txt_honeypot_secret = "nginx-test-secret",
+        trap_ban_duration = "1h",
+        security_log = false
+    })
+
+    -- 1. GET /robots.txt -> dynamic trap injected into existing body
+    local req_robots = {
+        method = "GET",
+        raw_uri = "/robots.txt",
+        uri = "/robots.txt",
+        body = "User-agent: *\nDisallow: /admin\n",
+        remote_addr = "203.0.113.10"
+    }
+    local pass_r, info_r = rw_robots:inspect(req_robots)
+    assert(pass_r == true, "GET /robots.txt must pass")
+    assert(req_robots.injected_robots_txt ~= nil, "injected_robots_txt must be populated on req_ctx")
+    assert(string.find(req_robots.injected_robots_txt, "Disallow: /admin"), "Original body must be preserved")
+    assert(string.find(req_robots.injected_robots_txt, "Disallow: " .. active_trap, 1, true), "Dynamic trap must be injected")
+
+    -- 2. GET /robots.txt with empty body -> synthesizes robots.txt
+    local req_empty = {
+        method = "GET",
+        raw_uri = "/robots.txt",
+        uri = "/robots.txt",
+        remote_addr = "203.0.113.11"
+    }
+    local pass_e, info_e = rw_robots:inspect(req_empty)
+    assert(pass_e == true, "GET /robots.txt must pass")
+    assert(string.find(req_empty.injected_robots_txt, "Disallow: " .. active_trap, 1, true), "Synthesized trap disallow must exist")
+
+    -- 3. Crawler trips today's dynamic trap URI -> 403 & banned
+    local crawler_ip = "198.51.100.77"
+    local pass_trap, block_trap = rw_robots:inspect({
+        method = "GET",
+        raw_uri = valid_prefixes[1] .. "/crawl-target",
+        uri = valid_prefixes[1] .. "/crawl-target",
+        remote_addr = crawler_ip
+    })
+    assert(pass_trap == false, "dynamic trap hit must be blocked")
+    assert(block_trap.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 4. Crawler tries legitimate endpoint -> Blocked due to active ban
+    local pass_banned, block_banned = rw_robots:inspect({
+        method = "GET",
+        raw_uri = "/normal.html",
+        uri = "/normal.html",
+        remote_addr = crawler_ip
+    })
+    assert(pass_banned == false, "banned client must be blocked on normal endpoints")
+    assert(block_banned.reason == "ip_banned", "reason must be ip_banned")
+
+    -- 5. Yesterday's trap prefix also triggers block & ban
+    local other_crawler = "198.51.100.88"
+    local pass_yest, block_yest = rw_robots:inspect({
+        method = "GET",
+        raw_uri = valid_prefixes[2] .. "/",
+        uri = valid_prefixes[2] .. "/",
+        remote_addr = other_crawler
+    })
+    assert(pass_yest == false, "yesterday trap hit must be blocked")
+    assert(block_yest.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 6. Clean client -> Allowed
+    local pass_clean, _ = rw_robots:inspect({
+        method = "GET",
+        raw_uri = "/normal.html",
+        uri = "/normal.html",
+        remote_addr = "192.0.2.55"
+    })
+    assert(pass_clean == true, "clean client must be allowed")
+    print("  ✓ dynamic edge robots.txt honeypot injection and crawler trapping verified")
 end
 
 print("All routewarden integration tests passed successfully!")

@@ -50,5 +50,56 @@ write('{"64500":["invalid"]}')
 assert(not rw.new({ allowed_asns = { '64500' }, asn_db = path }))
 -- Existing instances retain their validated snapshot after the file changes.
 assert(inspect(instance, '8.1.2.3'))
+
+-- Test blocked ASNs
+write('{"AS64500":["8.0.0.0/8","2001:db8::/32"],"64501":["8.8.8.0/24","2001:db8:1::/48"]}')
+local blocked_inst = assert(rw.new({ blocked_asns = { '64501' }, asn_db = path, security_log = false }))
+local ok_pass, _ = blocked_inst:inspect({ method = 'GET', uri = '/safe.html', raw_uri = '/safe.html', remote_addr = '8.1.2.3' })
+assert(ok_pass, 'safe IP in AS64500 should pass')
+local ok_block, block_info = blocked_inst:inspect({ method = 'GET', uri = '/safe.html', raw_uri = '/safe.html', remote_addr = '8.8.8.8' })
+assert(not ok_block, 'IP in AS64501 should be blocked')
+assert(block_info and block_info.reason == 'asn_blocked', 'reason should be asn_blocked')
+assert(block_info and block_info.pattern == 'AS64501', 'pattern should be AS64501')
+
+-- Test cloud host blocking
+write('{"16509":["54.240.196.0/24"],"24940":["136.243.0.0/16"]}')
+local cloud_inst = assert(rw.new({
+    block_cloud_hosts = true,
+    asn_db = path,
+    allow_patterns = { '^/api/webhook$' },
+    allowed_ips = { '54.240.196.99' },
+    security_log = false
+}))
+
+-- 1. Browser from AWS (AS16509) -> blocked (datacenter_browser_impersonation)
+local ok_c1, info_c1 = cloud_inst:inspect({
+    method = 'GET', uri = '/dashboard', raw_uri = '/dashboard', remote_addr = '54.240.196.10',
+    headers = { ['user-agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36' }
+})
+assert(not ok_c1, 'browser from AWS should be blocked')
+assert(info_c1.reason == 'datacenter_browser_impersonation', 'expected datacenter_browser_impersonation, got ' .. tostring(info_c1.reason))
+
+-- 2. Non-browser from Hetzner (AS24940) -> blocked (cloud_host_blocked)
+local ok_c2, info_c2 = cloud_inst:inspect({
+    method = 'GET', uri = '/items', raw_uri = '/items', remote_addr = '136.243.1.2',
+    headers = { ['user-agent'] = 'CustomCollector/2.0' }
+})
+assert(not ok_c2, 'scraper from Hetzner should be blocked')
+assert(info_c2.reason == 'cloud_host_blocked', 'expected cloud_host_blocked, got ' .. tostring(info_c2.reason))
+
+-- 3. AllowPattern exemption (/api/webhook) from AWS -> allowed
+local ok_c3, _ = cloud_inst:inspect({
+    method = 'GET', uri = '/api/webhook', raw_uri = '/api/webhook', remote_addr = '54.240.196.10',
+    headers = { ['user-agent'] = 'GitHub-Hookshot/1.0' }
+})
+assert(ok_c3, 'allow pattern should exempt AWS IP')
+
+-- 4. Whitelisted IP exemption from AWS -> allowed
+local ok_c4, _ = cloud_inst:inspect({
+    method = 'GET', uri = '/private', raw_uri = '/private', remote_addr = '54.240.196.99',
+    headers = { ['user-agent'] = 'CustomApp/1.0' }
+})
+assert(ok_c4, 'allowed IP should exempt AWS IP')
+
 os.remove(path)
 print('ASN lookup, validation, IPv4/IPv6, longest-prefix and trusted-proxy tests passed')
