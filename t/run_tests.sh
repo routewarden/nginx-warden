@@ -32,6 +32,10 @@ echo "▶ Running Response Modes Tests..."
 "$LUA_BIN" t/test_response.lua
 echo ""
 
+echo "▶ Running Proof-of-Work (powChallenge) Tests..."
+"$LUA_BIN" t/test_pow.lua
+echo ""
+
 echo "▶ Running End-to-End RouteWarden Inspection Tests..."
 "$LUA_BIN" t/test_routewarden.lua
 echo ""

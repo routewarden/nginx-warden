@@ -151,7 +151,8 @@ function _M.new(response_config)
     local default_code = 403
     if mode == "gzipbomb" or mode == "bomb" or mode == "fakesuccess" or mode == "decoy" or mode == "aipoison" or mode == "poison" or mode == "markovtarpit" or mode == "markov" or mode == "tokenbleed" then
         default_code = 200
-    elseif mode == "ratelimit" or mode == "ratelimitchallenge" or mode == "backoff" then
+    elseif mode == "ratelimit" or mode == "ratelimitchallenge" or mode == "backoff" or
+           mode == "powchallenge" or mode == "pow_challenge" or mode == "pow" or mode == "proofofwork" or mode == "hashcash" then
         default_code = 429
     elseif mode == "redirect" then
         default_code = 302
@@ -171,6 +172,9 @@ function _M.new(response_config)
         tarpit_delay_ms = cfg.tarpit_delay_ms or 1000,
         tarpit_max_duration_seconds = cfg.tarpit_max_duration_seconds or 60,
         stream_size_mb = cfg.stream_size_mb or 100,
+        pow_difficulty = cfg.pow_difficulty or 16,
+        pow_secret = cfg.pow_secret,
+        pow_timeout_seconds = cfg.pow_timeout_seconds or 300,
         silent_drop = cfg.silent_drop or false
     }
 
@@ -413,6 +417,23 @@ function _M:serve(req_ctx)
             body = string.format('{"error":"Too Many Requests","status":%d,"retryAfter":%d,"message":"Rate limit exceeded. Please back off."}', code, retry_sec)
         end
         return send_resp(code, ct, body)
+
+    elseif mode == "powchallenge" or mode == "pow_challenge" or mode == "pow" or mode == "proofofwork" or mode == "hashcash" then
+        local pow = require("resty.routewarden.pow")
+        local client_ip = (req_ctx and req_ctx.client_ip) or (ngx and ngx.var and ngx.var.remote_addr) or ""
+        local secret = self.pow_secret
+        local difficulty = self.pow_difficulty or 16
+        local timeout = self.pow_timeout_seconds or 300
+
+        local challenge = pow.generate_challenge(client_ip, secret, difficulty)
+        local html = pow.generate_html(challenge, difficulty, timeout)
+
+        set_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        local code = self.status_code
+        if code == 0 or code == 403 then
+            code = 429
+        end
+        return send_resp(code, "text/html; charset=utf-8", html)
 
     elseif mode == "xml" then
         local ct = self.content_type or "application/xml; charset=utf-8"

@@ -58,7 +58,10 @@ function _M.default_response_config()
         retry_after_seconds = 300,
         tarpit_delay_ms = 1000,
         tarpit_max_duration_seconds = 60,
-        stream_size_mb = 100
+        stream_size_mb = 100,
+        pow_difficulty = 16,
+        pow_secret = nil,
+        pow_timeout_seconds = 300
     }
 end
 

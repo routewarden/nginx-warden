@@ -1394,7 +1394,7 @@ function _M:inspect(req_ctx)
 
     -- Stage 1: IP Whitelist Check
     local headers = req_ctx.headers or (ngx and ngx.req and ngx.req.get_headers and ngx.req.get_headers()) or {}
-    local remote_addr = req_ctx.remote_addr or (ngx and ngx.var and ngx.var.remote_addr) or ""
+    local remote_addr = req_ctx.remote_addr or req_ctx.client_ip or (ngx and ngx.var and ngx.var.remote_addr) or ""
     local client_ip = ip_filter.extract_client_ip(headers, remote_addr, self.ip_matcher)
 
     if self.ip_matcher then
@@ -1471,6 +1471,20 @@ function _M:inspect(req_ctx)
         return false, block_info
     end
 
+    -- Check PoW solution cookie (__rw_pow) or header (X-RW-PoW)
+    local pow = require("resty.routewarden.pow")
+    local pow_token = pow.extract_pow_token(headers)
+    local is_pow_valid = false
+    if pow_token and pow_token ~= "" then
+        local sec = (self.config.response and self.config.response.pow_secret) or pow.DEFAULT_SECRET
+        local diff = (self.config.response and self.config.response.pow_difficulty) or pow.DEFAULT_DIFFICULTY
+        local tout = (self.config.response and self.config.response.pow_timeout_seconds) or pow.DEFAULT_TIMEOUT_SECONDS
+        local ok, _ = pow.verify_solution(client_ip, sec, pow_token, tout)
+        if ok then
+            is_pow_valid = true
+        end
+    end
+
     -- Stage 1d: User-Agent & AI Bot Inspection
     local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
     local ua_allowed = false
@@ -1486,24 +1500,28 @@ function _M:inspect(req_ctx)
         if engine then
             local is_verified = self:verify_fcrdns(client_ip, engine)
             if not is_verified then
-                local block_info = {
-                    blocked = true,
-                    status_code = self.config.status_code or 403,
-                    reason = "search_engine_spoofed",
-                    pattern = engine .. "_spoofed",
-                    matched_pattern = engine .. "_spoofed",
-                    target = user_agent,
-                    client_ip = client_ip,
-                    method = method,
-                    path = user_agent,
-                    request_uri = req_ctx.raw_uri or "",
-                    action = self.config.response and self.config.response.mode or "json",
-                    user_agent = user_agent
-                }
-                if self.config.security_log ~= false then
-                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                if is_pow_valid then
+                    ua_allowed = true
+                else
+                    local block_info = {
+                        blocked = true,
+                        status_code = self.config.status_code or 403,
+                        reason = "search_engine_spoofed",
+                        pattern = engine .. "_spoofed",
+                        matched_pattern = engine .. "_spoofed",
+                        target = user_agent,
+                        client_ip = client_ip,
+                        method = method,
+                        path = user_agent,
+                        request_uri = req_ctx.raw_uri or "",
+                        action = self.config.response and self.config.response.mode or "json",
+                        user_agent = user_agent
+                    }
+                    if self.config.security_log ~= false then
+                        logger.log_security_event(block_info, true, self.custom_log_sink)
+                    end
+                    return false, block_info
                 end
-                return false, block_info
             else
                 ua_allowed = true
             end
@@ -1586,24 +1604,26 @@ function _M:inspect(req_ctx)
         end
 
         if ua_blocked then
-            local block_info = {
-                blocked = true,
-                status_code = self.config.status_code or 403,
-                reason = ua_reason,
-                pattern = ua_pattern,
-                matched_pattern = ua_pattern,
-                target = user_agent,
-                client_ip = client_ip,
-                method = method,
-                path = user_agent,
-                request_uri = req_ctx.raw_uri or "",
-                action = self.config.response and self.config.response.mode or "json",
-                user_agent = user_agent
-            }
-            if self.config.security_log ~= false then
-                logger.log_security_event(block_info, true, self.custom_log_sink)
+            if not is_pow_valid then
+                local block_info = {
+                    blocked = true,
+                    status_code = self.config.status_code or 403,
+                    reason = ua_reason,
+                    pattern = ua_pattern,
+                    matched_pattern = ua_pattern,
+                    target = user_agent,
+                    client_ip = client_ip,
+                    method = method,
+                    path = user_agent,
+                    request_uri = req_ctx.raw_uri or "",
+                    action = self.config.response and self.config.response.mode or "json",
+                    user_agent = user_agent
+                }
+                if self.config.security_log ~= false then
+                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                end
+                return false, block_info
             end
-            return false, block_info
         end
     end
 
@@ -1713,24 +1733,26 @@ function _M:inspect(req_ctx)
                 reason = "datacenter_browser_impersonation"
             end
             local matched_pattern = string.format("AS%d (%s)", cloud_asn, provider)
-            local block_info = {
-                blocked = true,
-                status_code = self.config.status_code or 403,
-                reason = reason,
-                pattern = matched_pattern,
-                matched_pattern = matched_pattern,
-                target = norm_ip,
-                client_ip = client_ip,
-                method = method,
-                path = norm_ip,
-                request_uri = req_ctx.raw_uri or "",
-                action = self.config.response and self.config.response.mode or "json",
-                user_agent = user_agent
-            }
-            if self.config.security_log ~= false then
-                logger.log_security_event(block_info, true, self.custom_log_sink)
+            if not is_pow_valid then
+                local block_info = {
+                    blocked = true,
+                    status_code = self.config.status_code or 403,
+                    reason = reason,
+                    pattern = matched_pattern,
+                    matched_pattern = matched_pattern,
+                    target = norm_ip,
+                    client_ip = client_ip,
+                    method = method,
+                    path = norm_ip,
+                    request_uri = req_ctx.raw_uri or "",
+                    action = self.config.response and self.config.response.mode or "json",
+                    user_agent = user_agent
+                }
+                if self.config.security_log ~= false then
+                    logger.log_security_event(block_info, true, self.custom_log_sink)
+                end
+                return false, block_info
             end
-            return false, block_info
         end
     end
 
@@ -1929,6 +1951,17 @@ function _M:inspect(req_ctx)
     end
 
     if is_blocked then
+        if is_pow_valid then
+            return true, {
+                allowed = true,
+                pow_verified = true,
+                reason = "pow_verified",
+                client_ip = client_ip,
+                method = method,
+                path = blocked_target,
+                request_uri = raw_uri
+            }
+        end
         local action_mode = self.config.response.mode
         local status_code = 403
         if self.response_handler and self.response_handler.silent_drop then
