@@ -1170,7 +1170,7 @@ do
             ["user-agent"] = chrome_ua,
             ["accept-language"] = "en-US,en;q=0.9",
             ["accept-encoding"] = "gzip, deflate, br",
-            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
             ["sec-ch-ua-mobile"] = "?0",
             ["sec-ch-ua-platform"] = '"Windows"',
             ["sec-fetch-site"] = "none",
@@ -1188,7 +1188,7 @@ do
             ["user-agent"] = chrome_ua,
             ["accept-language"] = "en-US,en;q=0.9",
             ["accept-encoding"] = "gzip, deflate, br",
-            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
             ["sec-ch-ua-mobile"] = "?1",
             ["sec-ch-ua-platform"] = '"Windows"',
             ["sec-fetch-site"] = "none",
@@ -1218,6 +1218,26 @@ do
     assert(b_noch.reason == "browser_spoofed", "reason must be browser_spoofed")
     assert(b_noch.pattern == "missing_sec_ch_ua", "pattern must be missing_sec_ch_ua")
 
+    -- 3d. Missing GREASE brand in modern Chrome
+    local pass_nogrease, b_nogrease = rw_fingerprint:inspect({
+        method = "GET",
+        uri = "/index.html",
+        headers = {
+            ["user-agent"] = chrome_ua,
+            ["accept-language"] = "en-US,en;q=0.9",
+            ["accept-encoding"] = "gzip, deflate, br",
+            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua-mobile"] = "?0",
+            ["sec-ch-ua-platform"] = '"Windows"',
+            ["sec-fetch-site"] = "none",
+            ["sec-fetch-mode"] = "navigate",
+            ["sec-fetch-dest"] = "document"
+        }
+    })
+    assert(pass_nogrease == false, "missing GREASE brand must be blocked")
+    assert(b_nogrease.reason == "browser_spoofed", "reason must be browser_spoofed")
+    assert(b_nogrease.pattern == "missing_grease_brand", "pattern must be missing_grease_brand")
+
     -- 4. Script client (python-requests) -> blocked
     local pass_script, b_script = rw_fingerprint:inspect({
         method = "GET",
@@ -1237,7 +1257,7 @@ do
             ["user-agent"] = chrome_ua,
             ["accept-language"] = "en-US,en;q=0.9",
             ["accept-encoding"] = "gzip, deflate, br",
-            ["sec-ch-ua"] = '"Chromium";v="128", "Google Chrome";v="128"',
+            ["sec-ch-ua"] = '"Chromium";v="128", "Not?A_Brand";v="24", "Google Chrome";v="128"',
             ["sec-ch-ua-mobile"] = "?0",
             ["sec-ch-ua-platform"] = '"Windows"',
             ["sec-fetch-site"] = "none",
@@ -1253,6 +1273,7 @@ end
 
 -- 50. Exported helper function tests
 do
+    local chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     assert(routewarden.detect_search_engine("Googlebot/2.1") == "google")
     assert(routewarden.detect_search_engine("bingbot/2.0") == "bing")
     assert(routewarden.detect_search_engine("Applebot/0.1") == "apple")
@@ -1270,6 +1291,15 @@ do
 
     local is_spoofed, reason = routewarden.detect_browser_impersonation("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0", {})
     assert(is_spoofed == true and reason == "missing_accept_language")
+
+    local ok_order, ord_reason = routewarden.detect_browser_header_order({ "Host", "Sec-CH-UA", "User-Agent", "Accept" }, chrome_ua)
+    assert(ok_order == false, "canonical Chromium order should pass")
+
+    local bad_order_ua, ord_reason_ua = routewarden.detect_browser_header_order({ "Host", "User-Agent", "Sec-CH-UA", "Accept" }, chrome_ua)
+    assert(bad_order_ua == true and ord_reason_ua == "header_order_anomaly", "User-Agent before Sec-CH-UA should be flagged")
+
+    local bad_order_acc, ord_reason_acc = routewarden.detect_browser_header_order({ "Host", "Accept", "Sec-CH-UA", "User-Agent" }, chrome_ua)
+    assert(bad_order_acc == true and ord_reason_acc == "header_order_anomaly", "Accept before Sec-CH-UA should be flagged")
     print("  ✓ Exported helper functions verified")
 end
 

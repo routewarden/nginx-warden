@@ -88,6 +88,7 @@ function _M.default_config()
         verify_search_engine_bots = false,
         detect_browser_impersonation = false,
         block_script_clients = false,
+        block_cloud_hosts = false,
         methods = { "GET" },
         check_query = false,
         check_headers = {},

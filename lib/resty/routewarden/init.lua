@@ -489,6 +489,9 @@ local function normalize_json_config(raw)
     if raw.block_script_clients ~= nil then t.block_script_clients = raw.block_script_clients
     elseif raw.blockScriptClients ~= nil then t.block_script_clients = raw.blockScriptClients end
 
+    if raw.block_cloud_hosts ~= nil then t.block_cloud_hosts = raw.block_cloud_hosts
+    elseif raw.blockCloudHosts ~= nil then t.block_cloud_hosts = raw.blockCloudHosts end
+
     if raw.allowed_ips ~= nil then t.allowed_ips = raw.allowed_ips
     elseif raw.allowedIps ~= nil then t.allowed_ips = raw.allowedIps end
 
@@ -719,6 +722,10 @@ function _M.new(opts)
         local bsc = source.block_script_clients
         if bsc == nil then bsc = source.blockScriptClients end
         if bsc ~= nil then cfg.block_script_clients = bsc end
+
+        local bch = source.block_cloud_hosts
+        if bch == nil then bch = source.blockCloudHosts end
+        if bch ~= nil then cfg.block_cloud_hosts = bch end
         local aips = source.allowed_ips
         if aips == nil then aips = source.allowedIps end
         if aips then cfg.allowed_ips = aips end
@@ -865,7 +872,8 @@ function _M.new(opts)
     add_entries(all_trusted_proxies, cfg.trusted_proxies)
 
     local blocked_asns = cfg.blocked_asns or cfg.blockedASNs
-    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json, blocked_asns)
+    local block_cloud = cfg.block_cloud_hosts or cfg.blockCloudHosts
+    local asn_matcher, asn_err = asn_filter.new(cfg.allowed_asns, cfg.asn_db, parse_json, blocked_asns, block_cloud)
     if not asn_matcher then return nil, asn_err end
     local ip_matcher, err
     if #all_allowed_ips > 0 or #all_trusted_proxies > 0 then
@@ -1074,7 +1082,60 @@ local function is_ai_bot(ua)
     return lower_ua:find("gptbot") or lower_ua:find("claudebot") or lower_ua:find("anthropic") or lower_ua:find("claude%-web") or lower_ua:find("google%-extended") or lower_ua:find("bytespider") or lower_ua:find("ccbot") or lower_ua:find("applebot%-extended") or lower_ua:find("cohere") or lower_ua:find("cohere%-ai") or lower_ua:find("amazonbot") or lower_ua:find("diffbot") or lower_ua:find("imagesiftbot") or lower_ua:find("facebookbot") or lower_ua:find("meta%-externalagent") or lower_ua:find("meta%-externalfetcher") or lower_ua:find("omgilibot") or lower_ua:find("timpibot") or lower_ua:find("webzio") or lower_ua:find("youbot") or lower_ua:find("mistralbot") or lower_ua:find("deepseekbot") or lower_ua:find("exabot") or lower_ua:find("metaphorbot") or lower_ua:find("cotalker") or lower_ua:find("petalbot") or lower_ua:find("perplexitybot") or lower_ua:find("perplexity%-search") or lower_ua:find("oai%-searchbot") or lower_ua:find("chatgpt%-user") or lower_ua:find("grokbot") or lower_ua:find("twitterbot") or lower_ua:find("duckassistbot") or lower_ua:find("bingpreview") or lower_ua:find("firecrawl") or lower_ua:find("apify") or lower_ua:find("zyte") or lower_ua:find("brightdata") or lower_ua:find("crawlbase") or lower_ua:find("scrapingbee") or lower_ua:find("octoparse") or lower_ua:find("autogpt") or lower_ua:find("langchain") or lower_ua:find("llamaindex") or lower_ua:find("agentgpt")
 end
 
-local function detect_browser_impersonation(ua, headers)
+local grease_regex = compile_regex([[(?i)(?:Not[ _?=/().;:A-Za-z0-9-]*Brand|Not[^\w\s]?A[^\w\s]?Brand)]])
+
+local function has_grease_brand(sec_ch_ua)
+    if not sec_ch_ua or sec_ch_ua == "" then return false end
+    if grease_regex and grease_regex:match(sec_ch_ua) then
+        return true
+    end
+    local lower = string.lower(sec_ch_ua)
+    if lower:find("not") and lower:find("brand") then
+        return true
+    end
+    return false
+end
+
+local function detect_browser_header_order(header_order, ua)
+    if not header_order or #header_order == 0 or not ua or ua == "" then
+        return false, nil
+    end
+    local lower_ua = string.lower(ua)
+    local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+    if not is_browser then return false, nil end
+    local chrome_ver = string.match(ua, "[Cc]hrome/(%d+)") or string.match(ua, "[Cc]hromium/(%d+)") or string.match(ua, "[Ee]dg/(%d+)")
+    if not chrome_ver then return false, nil end
+    local ver_num = tonumber(chrome_ver)
+    if not ver_num or ver_num < 89 then return false, nil end
+
+    local sec_ch_ua_idx = -1
+    local ua_idx = -1
+    local accept_idx = -1
+
+    for i, h in ipairs(header_order) do
+        local lower_h = string.lower(string.match(h, "^%s*(.-)%s*$"))
+        if lower_h == "sec-ch-ua" and sec_ch_ua_idx == -1 then
+            sec_ch_ua_idx = i
+        elseif lower_h == "user-agent" and ua_idx == -1 then
+            ua_idx = i
+        elseif lower_h == "accept" and accept_idx == -1 then
+            accept_idx = i
+        end
+    end
+
+    if sec_ch_ua_idx ~= -1 then
+        if ua_idx ~= -1 and ua_idx < sec_ch_ua_idx then
+            return true, "header_order_anomaly"
+        end
+        if accept_idx ~= -1 and accept_idx < sec_ch_ua_idx then
+            return true, "header_order_anomaly"
+        end
+    end
+
+    return false, nil
+end
+
+local function detect_browser_impersonation(ua, headers, header_order)
     if not ua or ua == "" then return false, nil end
     local lower_ua = string.lower(ua)
     local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
@@ -1088,6 +1149,12 @@ local function detect_browser_impersonation(ua, headers)
     -- Exclude recognized AI bots governed by AI bot registry profiles
     if is_ai_bot(ua) then
         return false, nil
+    end
+
+    -- 0. Header ordering checks (if explicit order slice provided)
+    if header_order and #header_order > 0 then
+        local is_anomaly, reason = detect_browser_header_order(header_order, ua)
+        if is_anomaly then return true, reason end
     end
 
     -- 1. Mandatory companion headers
@@ -1170,6 +1237,14 @@ local function detect_browser_impersonation(ua, headers)
                     return true, "sec_fetch_mode_mismatch"
                 end
             end
+            if ver_num >= 89 and sec_ch_ua ~= "" then
+                local lower_ch = string.lower(sec_ch_ua)
+                if lower_ch:find("google chrome") or lower_ch:find("chromium") then
+                    if not has_grease_brand(sec_ch_ua) then
+                        return true, "missing_grease_brand"
+                    end
+                end
+            end
         end
     end
 
@@ -1210,6 +1285,7 @@ end
 
 _M.detect_search_engine = detect_search_engine
 _M.detect_browser_impersonation = detect_browser_impersonation
+_M.detect_browser_header_order = detect_browser_header_order
 _M.detect_script_client = detect_script_client
 
 local function is_valid_host_for_engine(host, engine)
@@ -1622,6 +1698,39 @@ function _M:inspect(req_ctx)
                 end
                 return true
             end
+        end
+    end
+
+    -- Datacenter & Cloud Hosting IP Classifier
+    if not ua_allowed and self.config.block_cloud_hosts and self.asn_matcher then
+        local is_cloud, cloud_asn, provider = self.asn_matcher:is_cloud_host(norm_ip)
+        if is_cloud then
+            local user_agent = headers["user-agent"] or headers["User-Agent"] or ""
+            local lower_ua = string.lower(user_agent)
+            local is_browser = lower_ua:find("mozilla/") and (lower_ua:find("applewebkit") or lower_ua:find("gecko") or lower_ua:find("chrome") or lower_ua:find("safari") or lower_ua:find("firefox") or lower_ua:find("edg/"))
+            local reason = "cloud_host_blocked"
+            if is_browser then
+                reason = "datacenter_browser_impersonation"
+            end
+            local matched_pattern = string.format("AS%d (%s)", cloud_asn, provider)
+            local block_info = {
+                blocked = true,
+                status_code = self.config.status_code or 403,
+                reason = reason,
+                pattern = matched_pattern,
+                matched_pattern = matched_pattern,
+                target = norm_ip,
+                client_ip = client_ip,
+                method = method,
+                path = norm_ip,
+                request_uri = req_ctx.raw_uri or "",
+                action = self.config.response and self.config.response.mode or "json",
+                user_agent = user_agent
+            }
+            if self.config.security_log ~= false then
+                logger.log_security_event(block_info, true, self.custom_log_sink)
+            end
+            return false, block_info
         end
     end
 
