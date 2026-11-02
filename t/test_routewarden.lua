@@ -1551,6 +1551,97 @@ do
     print("  ✓ encoded delimiters (%3f, %23) and whitespace (%0d, %0a, %09) evasion verified")
 end
 
+do
+    -- Robots.txt dynamic honeypot token, injection, and crawler trapping tests
+    local hp = require("resty.routewarden.robots_honeypot")
+    local fixed_ts = 1793577600 -- 2026-11-02
+    local token1 = hp.get_robots_honeypot_token("secret123", fixed_ts)
+    local token2 = hp.get_robots_honeypot_token("secret123", fixed_ts)
+    assert(token1 == token2, "Token must be deterministic")
+    assert(#token1 == 12, "Token must be 12 characters")
+    assert(token1 == "6d8f8f44e487", "Expected exact 12-char HMAC token 6d8f8f44e487")
+
+    local active_trap, valid_prefixes = hp.get_active_robots_honeypot_traps("nginx-test-secret", os.time())
+    assert(string.sub(active_trap, 1, 10) == "/_rw_trap_", "Active trap must start with /_rw_trap_")
+    assert(string.sub(active_trap, -1) == "/", "Active trap must end with /")
+    assert(#valid_prefixes == 2, "Must return today and yesterday prefixes")
+
+    local rw_robots = routewarden.new({
+        enabled = true,
+        enable_robots_txt_honeypot = true,
+        robots_txt_honeypot_secret = "nginx-test-secret",
+        trap_ban_duration = "1h",
+        security_log = false
+    })
+
+    -- 1. GET /robots.txt -> dynamic trap injected into existing body
+    local req_robots = {
+        method = "GET",
+        raw_uri = "/robots.txt",
+        uri = "/robots.txt",
+        body = "User-agent: *\nDisallow: /admin\n",
+        remote_addr = "203.0.113.10"
+    }
+    local pass_r, info_r = rw_robots:inspect(req_robots)
+    assert(pass_r == true, "GET /robots.txt must pass")
+    assert(req_robots.injected_robots_txt ~= nil, "injected_robots_txt must be populated on req_ctx")
+    assert(string.find(req_robots.injected_robots_txt, "Disallow: /admin"), "Original body must be preserved")
+    assert(string.find(req_robots.injected_robots_txt, "Disallow: " .. active_trap, 1, true), "Dynamic trap must be injected")
+
+    -- 2. GET /robots.txt with empty body -> synthesizes robots.txt
+    local req_empty = {
+        method = "GET",
+        raw_uri = "/robots.txt",
+        uri = "/robots.txt",
+        remote_addr = "203.0.113.11"
+    }
+    local pass_e, info_e = rw_robots:inspect(req_empty)
+    assert(pass_e == true, "GET /robots.txt must pass")
+    assert(string.find(req_empty.injected_robots_txt, "Disallow: " .. active_trap, 1, true), "Synthesized trap disallow must exist")
+
+    -- 3. Crawler trips today's dynamic trap URI -> 403 & banned
+    local crawler_ip = "198.51.100.77"
+    local pass_trap, block_trap = rw_robots:inspect({
+        method = "GET",
+        raw_uri = valid_prefixes[1] .. "/crawl-target",
+        uri = valid_prefixes[1] .. "/crawl-target",
+        remote_addr = crawler_ip
+    })
+    assert(pass_trap == false, "dynamic trap hit must be blocked")
+    assert(block_trap.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 4. Crawler tries legitimate endpoint -> Blocked due to active ban
+    local pass_banned, block_banned = rw_robots:inspect({
+        method = "GET",
+        raw_uri = "/normal.html",
+        uri = "/normal.html",
+        remote_addr = crawler_ip
+    })
+    assert(pass_banned == false, "banned client must be blocked on normal endpoints")
+    assert(block_banned.reason == "ip_banned", "reason must be ip_banned")
+
+    -- 5. Yesterday's trap prefix also triggers block & ban
+    local other_crawler = "198.51.100.88"
+    local pass_yest, block_yest = rw_robots:inspect({
+        method = "GET",
+        raw_uri = valid_prefixes[2] .. "/",
+        uri = valid_prefixes[2] .. "/",
+        remote_addr = other_crawler
+    })
+    assert(pass_yest == false, "yesterday trap hit must be blocked")
+    assert(block_yest.reason == "honeypot_trap_triggered", "reason must be honeypot_trap_triggered")
+
+    -- 6. Clean client -> Allowed
+    local pass_clean, _ = rw_robots:inspect({
+        method = "GET",
+        raw_uri = "/normal.html",
+        uri = "/normal.html",
+        remote_addr = "192.0.2.55"
+    })
+    assert(pass_clean == true, "clean client must be allowed")
+    print("  ✓ dynamic edge robots.txt honeypot injection and crawler trapping verified")
+end
+
 print("All routewarden integration tests passed successfully!")
 
 

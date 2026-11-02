@@ -82,6 +82,8 @@ function _M.default_config()
         block_user_agents = {},
         allow_user_agents = {},
         honeypot_trap_paths = {},
+        enable_robots_txt_honeypot = false,
+        robots_txt_honeypot_secret = "routewarden-default-robots-trap-seed",
         trap_ban_duration = "24h",
         verify_search_engine_bots = false,
         detect_browser_impersonation = false,

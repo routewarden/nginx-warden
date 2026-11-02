@@ -7,6 +7,7 @@ local ip_filter = require("resty.routewarden.ip_filter")
 local asn_filter = require("resty.routewarden.asn_filter")
 local response = require("resty.routewarden.response")
 local logger = require("resty.routewarden.logger")
+local robots_honeypot = require("resty.routewarden.robots_honeypot")
 
 local _M = {
     _VERSION = "1.8.0"
@@ -470,6 +471,12 @@ local function normalize_json_config(raw)
     if raw.honeypot_trap_paths ~= nil then t.honeypot_trap_paths = raw.honeypot_trap_paths
     elseif raw.honeypotTrapPaths ~= nil then t.honeypot_trap_paths = raw.honeypotTrapPaths end
 
+    if raw.enable_robots_txt_honeypot ~= nil then t.enable_robots_txt_honeypot = raw.enable_robots_txt_honeypot
+    elseif raw.enableRobotsTxtHoneypot ~= nil then t.enable_robots_txt_honeypot = raw.enableRobotsTxtHoneypot end
+
+    if raw.robots_txt_honeypot_secret ~= nil then t.robots_txt_honeypot_secret = raw.robots_txt_honeypot_secret
+    elseif raw.robotsTxtHoneypotSecret ~= nil then t.robots_txt_honeypot_secret = raw.robotsTxtHoneypotSecret end
+
     if raw.trap_ban_duration ~= nil then t.trap_ban_duration = raw.trap_ban_duration
     elseif raw.trapBanDuration ~= nil then t.trap_ban_duration = raw.trapBanDuration end
 
@@ -688,6 +695,14 @@ function _M.new(opts)
         local htp = source.honeypot_trap_paths
         if htp == nil then htp = source.honeypotTrapPaths end
         if htp then cfg.honeypot_trap_paths = htp end
+
+        local erth = source.enable_robots_txt_honeypot
+        if erth == nil then erth = source.enableRobotsTxtHoneypot end
+        if erth ~= nil then cfg.enable_robots_txt_honeypot = erth end
+
+        local rths = source.robots_txt_honeypot_secret
+        if rths == nil then rths = source.robotsTxtHoneypotSecret end
+        if rths ~= nil then cfg.robots_txt_honeypot_secret = rths end
 
         local tbd = source.trap_ban_duration
         if tbd == nil then tbd = source.trapBanDuration end
@@ -1521,13 +1536,26 @@ function _M:inspect(req_ctx)
     local uri = req_ctx.uri or (ngx and ngx.var and ngx.var.uri) or "/"
     local candidate_paths = normalizer.extract_candidate_paths(raw_uri, uri, raw_uri)
 
-    -- Stage 2b: Honeypot Spider Trap Check
+    -- Stage 2b: Honeypot Spider Trap Check (static and dynamic robots.txt traps)
+    local active_traps = {}
     if self.config.honeypot_trap_paths and #self.config.honeypot_trap_paths > 0 then
+        for _, tp in ipairs(self.config.honeypot_trap_paths) do
+            active_traps[#active_traps + 1] = tp
+        end
+    end
+    if self.config.enable_robots_txt_honeypot then
+        local _, dyn_prefixes = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+        for _, pfx in ipairs(dyn_prefixes) do
+            active_traps[#active_traps + 1] = pfx
+        end
+    end
+
+    if #active_traps > 0 then
         local trap_triggered = false
         local matched_trap = ""
         local matched_path = ""
         for _, path_cand in ipairs(candidate_paths) do
-            for _, trap_path in ipairs(self.config.honeypot_trap_paths) do
+            for _, trap_path in ipairs(active_traps) do
                 local clean_trap = string.match(trap_path, "^%s*(.-)%s*$")
                 if clean_trap ~= "" then
                     if string.sub(clean_trap, 1, 1) ~= "/" then
@@ -1586,6 +1614,12 @@ function _M:inspect(req_ctx)
     for _, path_cand in ipairs(candidate_paths) do
         for _, allow_re in ipairs(self.compiled_allow) do
             if allow_re:match(path_cand) then
+                if self.config.enable_robots_txt_honeypot and robots_honeypot.is_robots_txt_path(path_cand) and (method == "GET" or method == "HEAD") then
+                    local active_trap = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+                    local injected = robots_honeypot.inject_robots_txt_trap(req_ctx.body or req_ctx.existing_robots_txt, active_trap)
+                    req_ctx.injected_robots_txt = injected
+                    return true, { injected_robots_txt = injected }
+                end
                 return true
             end
         end
@@ -1816,6 +1850,17 @@ function _M:inspect(req_ctx)
         return false, block_info
     end
 
+    if self.config.enable_robots_txt_honeypot and (method == "GET" or method == "HEAD") then
+        for _, path_cand in ipairs(candidate_paths) do
+            if robots_honeypot.is_robots_txt_path(path_cand) then
+                local active_trap = robots_honeypot.get_active_robots_honeypot_traps(self.config.robots_txt_honeypot_secret, os.time())
+                local injected = robots_honeypot.inject_robots_txt_trap(req_ctx.body or req_ctx.existing_robots_txt, active_trap)
+                req_ctx.injected_robots_txt = injected
+                return true, { injected_robots_txt = injected }
+            end
+        end
+    end
+
     return true
 end
 
@@ -1845,6 +1890,19 @@ function _M:check(req_ctx)
     local passed, block_info = self:inspect(ctx)
     if not passed then
         return self.response_handler:serve(ctx)
+    end
+
+    if self.config.enable_robots_txt_honeypot and ctx.injected_robots_txt then
+        if ctx.respond then
+            ctx.respond(200, "text/plain; charset=utf-8", ctx.injected_robots_txt)
+            return
+        end
+        if ngx and ngx.say and ngx.exit then
+            ngx.header["Content-Type"] = "text/plain; charset=utf-8"
+            ngx.status = 200
+            ngx.say(ctx.injected_robots_txt)
+            return ngx.exit(ngx.HTTP_OK)
+        end
     end
 end
 
